@@ -52,6 +52,45 @@ export function setupAppMiddleware(app: express.Express, opts) {
     }
   });
 
+  // TEMP diagnostics: detect Object.prototype pollution (Mongo "cyclic dependency detected" errors)
+  const PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const findProtoKeys = (obj, path = '', depth = 0, out: string[] = []) => {
+    if (obj && typeof obj === 'object' && depth < 20) {
+      for (const k of Object.keys(obj)) {
+        const p = path ? `${path}.${k}` : k;
+        if (PROTO_KEYS.has(k)) out.push(p);
+        findProtoKeys(obj[k], p, depth + 1, out);
+      }
+    }
+    return out;
+  };
+  const protoDiagReqInfo = req => ({
+    ip: req.header('cf-connecting-ip') || Common.Utils.getIpFromReq(req),
+    cfRay: req.header('cf-ray'),
+    identity: req.header('x-identity'),
+    userAgent: req.header('user-agent'),
+    clientVersion: req.header('x-client-version')
+  });
+  let protoPollutionLogged = false;
+  app.use((req, res, next) => {
+    const suspicious = findProtoKeys({ body: req.body, query: req.query });
+    if (suspicious.length) {
+      logger.warn('PROTO-DIAG suspicious keys in %s %s: %o req: %o',
+        req.method, req.originalUrl, suspicious, protoDiagReqInfo(req));
+    }
+    res.on('finish', () => {
+      if (protoPollutionLogged) return;
+      const keys = [];
+      for (const k in {}) keys.push(k);
+      if (keys.length) {
+        protoPollutionLogged = true;
+        logger.error('PROTO-DIAG Object.prototype polluted with keys %o; first seen after %s %s (body keys: %o) req: %o',
+          keys, req.method, req.originalUrl, Object.keys(req.body || {}), protoDiagReqInfo(req));
+      }
+    });
+    next();
+  });
+
   app.use((req, res, next) => {
     if (config.maintenanceOpts.maintenanceMode === true) {
       const errorCode = 503;
