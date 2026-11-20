@@ -32,6 +32,7 @@
     "url": "https://github.com/bitpay/bitcore/tree/master/packages/bitcore-lib-doge"
   },
   "browser": {
+    "./lib/crypto/ecdsa-native.js": false,
     "request": "browser-request"
   },
   "dependencies": {

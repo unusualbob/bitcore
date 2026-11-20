@@ -4,6 +4,11 @@ const BufferUtil = require('../util/buffer');
 const Hash = require('./hash');
 
 const sha512hmac = Hash.sha512hmac;
+const bnBufferSerializer = Symbol.for('@bitpay-labs/bitcore.bn.toBuffer');
+
+function hasStandardBNEncoding(bn) {
+  return bn.toBuffer?.[bnBufferSerializer] === true;
+}
 
 function encodePath(indexes, chainCode) {
   // JavaScript accepts some indexes that cannot be passed as a uint32.
@@ -38,4 +43,4 @@ function checkPublicPrefix(prefix) {
   if (prefix !== 2 && prefix !== 3) throw new Error('Invalid compressed native public key');
 }
 
-module.exports = { encodePath, isNativeBuffer, parentFingerPrint, checkResult, checkPublicPrefix };
+module.exports = { encodePath, isNativeBuffer, parentFingerPrint, checkResult, checkPublicPrefix, hasStandardBNEncoding };

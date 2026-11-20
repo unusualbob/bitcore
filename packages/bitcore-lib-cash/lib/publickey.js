@@ -1,6 +1,8 @@
 'use strict';
 
+const { hasStandardBNEncoding } = require('./crypto/bip32-native');
 var BN = require('./crypto/bn');
+const { native } = require('./crypto/ecdsa-native');
 var Point = require('./crypto/point');
 var Hash = require('./crypto/hash');
 var JSUtil = require('./util/js');
@@ -47,19 +49,66 @@ function PublicKey(data, extra) {
   }
   extra = extra || {};
 
+  if (typeof native?.publicKeyParse === 'function' &&
+      (typeof data === 'string' || (PublicKey._isBuffer(data) && !(data.x && data.y)))) {
+    const encoded = typeof data === 'string' ? Buffer.from(data, 'hex') : data;
+    const parsed = parseNativeDER(encoded);
+    if (parsed) {
+      parsed.network = extra.network === undefined ? undefined : Network.get(extra.network);
+      return initialize(this, parsed);
+    }
+  }
   var info = this._classifyArgs(data, extra);
 
   // validation
   info.point.validate();
 
-  JSUtil.defineImmutable(this, {
+  return initialize(this, info);
+}
+
+function initialize(publicKey, info) {
+  JSUtil.defineImmutable(publicKey, {
     point: info.point,
     compressed: info.compressed,
     network: info.network || Network.defaultNetwork
   });
 
-  return this;
-};
+  return publicKey;
+}
+
+function pointFromNativeSEC(sec) {
+  if (!Buffer.isBuffer(sec) || sec.length !== 65 || sec[0] !== 4) {
+    throw new Error('Invalid uncompressed native public key');
+  }
+  return Point.getG().curve.point(new BN(sec.subarray(1, 33)), new BN(sec.subarray(33, 65)));
+}
+
+function parseNativeDER(data) {
+  if (typeof native?.publicKeyParse !== 'function' || !PublicKey._isBuffer(data) ||
+      (data.length !== 33 && data.length !== 65)) return;
+  const sec = Buffer.from(data);
+  const compressed = sec.length === 33;
+  if (compressed ? sec[0] !== 2 && sec[0] !== 3 : sec[0] !== 4) return;
+  const validated = native.publicKeyParse(sec);
+  if (validated) return { point: pointFromNativeSEC(validated), compressed };
+}
+
+function createNativePoint(bn) {
+  if (typeof native?.publicKeyCreate !== 'function' || !(bn instanceof BN) ||
+      !hasStandardBNEncoding(bn) || bn.isNeg() || bn.byteLength() > 32) {
+    return;
+  }
+
+  const secret = bn.toBuffer({ size: 32 });
+  try {
+    const sec = native.publicKeyCreate(secret, false);
+    if (sec) {
+      return pointFromNativeSEC(sec);
+    }
+  } finally {
+    secret.fill(0);
+  }
+}
 
 /**
  * Internal function to differentiate between arguments passed to the constructor
@@ -125,7 +174,7 @@ PublicKey._isBuffer = function(param) {
 PublicKey._transformPrivateKey = function(privkey) {
   $.checkArgument(PublicKey._isPrivateKey(privkey), 'Must be an instance of PrivateKey');
   var info = {};
-  info.point = Point.getG().mul(privkey.bn);
+  info.point = createNativePoint(privkey.bn) || Point.getG().mul(privkey.bn);
   info.compressed = privkey.compressed;
   info.network = privkey.network;
   return info;
@@ -217,6 +266,15 @@ PublicKey._transformObject = function(json) {
  */
 PublicKey.fromPrivateKey = function(privkey) {
   $.checkArgument(PublicKey._isPrivateKey(privkey), 'Must be an instance of PrivateKey');
+  const point = createNativePoint(privkey.bn);
+  if (point) {
+    return initialize(Object.create(PublicKey.prototype), {
+      point,
+      compressed: privkey.compressed === undefined || privkey.compressed,
+      network: privkey.network === undefined ? undefined : Network.get(privkey.network)
+    });
+  }
+
   var info = PublicKey._transformPrivateKey(privkey);
   return new PublicKey(info.point, {
     compressed: info.compressed,
@@ -232,6 +290,8 @@ PublicKey.fromPrivateKey = function(privkey) {
  */
 PublicKey.fromDER = PublicKey.fromBuffer = function(buf, strict) {
   $.checkArgument(PublicKey._isBuffer(buf), 'Must be a hex buffer of DER encoded public key');
+  const parsed = parseNativeDER(buf);
+  if (parsed) return initialize(Object.create(PublicKey.prototype), parsed);
   var info = PublicKey._transformDER(buf, strict);
   return new PublicKey(info.point, {
     compressed: info.compressed
@@ -261,6 +321,8 @@ PublicKey.fromPoint = function(point, compressed) {
  */
 PublicKey.fromString = function(str, encoding) {
   var buf = Buffer.from(str, encoding || 'hex');
+  const parsed = parseNativeDER(buf);
+  if (parsed) return initialize(Object.create(PublicKey.prototype), parsed);
   var info = PublicKey._transformDER(buf);
   return new PublicKey(info.point, {
     compressed: info.compressed

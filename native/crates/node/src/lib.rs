@@ -3,6 +3,11 @@ use std::panic::catch_unwind;
 use std::ptr::null_mut;
 use std::sync::atomic::{Ordering, compiler_fence};
 
+mod bch_schnorr;
+mod kdfs;
+mod points;
+mod taproot;
+
 type Env = *mut c_void;
 type Value = *mut c_void;
 type CallbackInfo = *mut c_void;
@@ -376,7 +381,14 @@ pub unsafe extern "C" fn napi_register_module_v1(env: Env, exports: Value) -> Va
             (c"publicKeyCreate", public_key_create),
             (c"derivePrivatePath", derive_private_path),
             (c"derivePublicPath", derive_public_path),
-        ] {
+            (c"publicKeyParse", points::parse),
+            (c"signBchSchnorr", bch_schnorr::sign),
+            (c"verifyBchSchnorr", bch_schnorr::verify),
+        ]
+        .into_iter()
+        .chain(kdfs::FUNCTIONS)
+        .chain(taproot::FUNCTIONS)
+        {
             let function = js_value(|value| unsafe {
                 napi_create_function(
                     env,

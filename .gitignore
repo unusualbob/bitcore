@@ -26,3 +26,4 @@ bitcore-test.local.config.json
 .worktrees
 /native/target/
 /packages/bitcore-lib/lib/native/*.node
+/packages/bitcore-lib-*/lib/native/*.node

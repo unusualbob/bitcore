@@ -41,8 +41,11 @@ function sighash(transaction, sighashType, inputNumber, subscript) {
   subscript.removeCodeseparators();
 
   for (let i = 0; i < txcopy.inputs.length; i++) {
-    // Blank signatures for other inputs
-    txcopy.inputs[i] = new Input(txcopy.inputs[i]).setScript(Script.empty());
+    // Unsigned inputs in this private copy already have the signing representation.
+    const input = txcopy.inputs[i];
+    if (input._scriptBuffer.length || input.hasWitnesses() || input.isNull()) {
+      txcopy.inputs[i] = new Input(input).setScript(Script.empty());
+    }
   }
 
   txcopy.inputs[inputNumber] = new Input(txcopy.inputs[inputNumber]).setScript(subscript);
@@ -81,8 +84,7 @@ function sighash(transaction, sighashType, inputNumber, subscript) {
     txcopy.inputs = [txcopy.inputs[inputNumber]];
   }
 
-  const buf = new BufferWriter()
-    .write(txcopy.toBuffer())
+  const buf = txcopy.toBufferWriter(new BufferWriter())
     .writeInt32LE(sighashType)
     .toBuffer();
   let ret = Hash.sha256sha256(buf);

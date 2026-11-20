@@ -40,4 +40,9 @@ describe('pbkdf2', function() {
     const res = pbkdf2(key, salt, 4096, 64);
     res.toString('hex').should.equal('8c0511f4c6e597c6ac6315d8f0362e225f3c501495ba23b868c005174dc4ee71115b59f9e60cd9532fa33e0f75aefe30225c583a186cd82bd4daea9724a3d3b8');
   });  
+
+  it('retains the legacy behavior for zero output length and zero iterations', function() {
+    pbkdf2('key', 'salt', 2, 0).should.deep.equal(Buffer.alloc(0));
+    pbkdf2('key', 'salt', 0, 64).should.deep.equal(pbkdf2('key', 'salt', 1, 64));
+  });
 });

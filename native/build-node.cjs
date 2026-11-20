@@ -15,14 +15,17 @@ const artifact = records.find(record => record.reason === 'compiler-artifact' &&
 if (!artifact) throw new Error('Cargo did not produce the bitcore Node addon');
 const binary = artifact.filenames.find(file => /\.(so|dylib|dll)$/.test(file));
 if (!binary) throw new Error('Missing native library in Cargo output');
-const dest = path.join(__dirname, '../packages/bitcore-lib/lib/native/bitcore_ecdsa.node');
-fs.mkdirSync(path.dirname(dest), { recursive: true });
-// Replace atomically so a process using the previous binary can finish safely.
-const temporary = path.join(path.dirname(dest), 'bitcore_ecdsa.' + process.pid + '.tmp.node');
-try {
-  fs.copyFileSync(binary, temporary);
-  fs.renameSync(temporary, dest);
-} finally {
-  fs.rmSync(temporary, { force: true });
+for (const packageName of ['bitcore-lib', 'bitcore-lib-cash', 'bitcore-lib-ltc', 'bitcore-lib-doge']) {
+  const nativeDir = path.join(__dirname, '../packages', packageName, 'lib/native');
+  const dest = path.join(nativeDir, 'bitcore_ecdsa.node');
+  fs.mkdirSync(nativeDir, { recursive: true });
+  // Replace atomically so a process using the previous binary can finish safely.
+  const temporary = path.join(nativeDir, 'bitcore_ecdsa.' + process.pid + '.tmp.node');
+  try {
+    fs.copyFileSync(binary, temporary);
+    fs.renameSync(temporary, dest);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+  console.log(dest);
 }
-console.log(dest);

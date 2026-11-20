@@ -13,6 +13,12 @@ var Hash = require('./hash');
 var BufferUtil = require('../util/buffer');
 var _ = require('lodash');
 var $ = require('../util/preconditions');
+const { native } = require('./ecdsa-native');
+const { hasStandardBNEncoding } = require('./bip32-native');
+
+const sha256 = Hash.sha256;
+const sha256hmac = Hash.sha256hmac;
+const pointToCompressed = Point.pointToCompressed;
 
 var Schnorr = function Schnorr(obj) {
   if (!(this instanceof Schnorr)) {
@@ -119,6 +125,30 @@ Schnorr.prototype._findSignature = function(d, e) {
 
     $.checkState(!d.lte(new BN(0)), new Error('privkey out of field of curve'));
     $.checkState(!d.gte(n), new Error('privkey out of field of curve'));
+
+    if (typeof native?.signBchSchnorr === 'function' &&
+        this.nonceFunctionRFC6979 === nonceFunctionRFC6979 &&
+        Hash.sha256 === sha256 && Hash.sha256hmac === sha256hmac &&
+        Point.pointToCompressed === pointToCompressed &&
+        d instanceof BN && hasStandardBNEncoding(d) && e instanceof BN &&
+        hasStandardBNEncoding(e) && !e.isNeg() && e.byteLength() <= 32) {
+      const secret = d.toBuffer({ size: 32 });
+      let signature;
+      try {
+        signature = native.signBchSchnorr(e.toBuffer({ size: 32 }), secret);
+      } finally {
+        secret.fill(0);
+      }
+      if (signature) {
+        if (!Buffer.isBuffer(signature) || signature.length !== 64) {
+          throw new Error('Invalid signature from native BCH Schnorr signing');
+        }
+        return {
+          r: BN.fromBuffer(signature.subarray(0, 32)),
+          s: BN.fromBuffer(signature.subarray(32))
+        };
+      }
+    }
   
     
     let k = this.nonceFunctionRFC6979(d.toBuffer({ size: 32 }), e.toBuffer({ size: 32 }));
@@ -172,6 +202,26 @@ Schnorr.prototype._findSignature = function(d, e) {
     if(r.gte(p) || s.gte(n)) {
       // ("Failed >= condition") 
       return true;
+    }
+
+    if (typeof native?.verifyBchSchnorr === 'function' &&
+        Hash.sha256 === sha256 && Point.pointToCompressed === pointToCompressed &&
+        this.pubkey instanceof PublicKey && r instanceof BN && s instanceof BN &&
+        !r.isNeg() && !s.isNeg() && hasStandardBNEncoding(r) && hasStandardBNEncoding(s)) {
+      // The challenge commits to compressed SEC, but verification needs the actual point.
+      const key = Buffer.concat([
+        Buffer.from([4]),
+        P.getX().toBuffer({ size: 32 }),
+        P.getY().toBuffer({ size: 32 })
+      ]);
+      const signature = Buffer.concat([getrBuffer(r), getsBuffer(s)]);
+      if (native.verifyBchSchnorr(Buffer.from(hashbuf), signature, key)) {
+        return false;
+      }
+      // Preserve legacy point behavior when a caller mutates coordinates.
+      if (P.curve.validate(P)) {
+        return true;
+      }
     }
     
     let Br = getrBuffer(this.sig.r);
@@ -234,6 +284,8 @@ Schnorr.prototype._findSignature = function(d, e) {
     }
     return k;
   }
+
+  const nonceFunctionRFC6979 = Schnorr.prototype.nonceFunctionRFC6979;
 
   Schnorr.sign = function(hashbuf, privkey, endian) {
     return Schnorr().set({

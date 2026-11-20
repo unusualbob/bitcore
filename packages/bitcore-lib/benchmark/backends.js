@@ -3,9 +3,9 @@
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 
-function measure(createSuite) {
+function measure(createSuite, { load, warmupMs, sampleMs }) {
   const loadStart = performance.now();
-  const bitcore = require('..');
+  const bitcore = load();
   const requireMilliseconds = performance.now() - loadStart;
   const { fixtures, operations } = createSuite(bitcore);
   const results = {};
@@ -21,15 +21,17 @@ function measure(createSuite) {
       } while (elapsed < duration);
       return count * 1000 / elapsed;
     };
-    run(250);
-    results[name] = run(1000);
+    run(warmupMs);
+    results[name] = run(sampleMs);
   }
   return { requireMilliseconds, operationsPerSecond: results };
 }
 
-module.exports = function benchmark(file, createSuite) {
+module.exports = function benchmark(file, createSuite, {
+  load = () => require('..'), warmupMs = 250, sampleMs = 1000
+} = {}) {
   if (process.argv[2] === '--sample') {
-    process.stdout.write(JSON.stringify(measure(createSuite)));
+    process.stdout.write(JSON.stringify(measure(createSuite, { load, warmupMs, sampleMs })));
     return;
   }
   const samples = { js: [], native: [] };

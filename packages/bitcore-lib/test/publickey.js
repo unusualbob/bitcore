@@ -258,6 +258,22 @@ describe('PublicKey', function() {
 
   describe('#fromDER', function() {
 
+    it('preserves the historical DER parser for noncanonical encodings', function() {
+      const x = Buffer.from('fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc30', 'hex');
+      const y = Buffer.from('4218f20ae6c646b363db68605822fb14264ca8d2587fdd6fbc750d587e76a7ee', 'hex');
+      const reduced = Buffer.alloc(32);
+      reduced[31] = 1;
+      const compressed = Buffer.concat([Buffer.from([2]), reduced]);
+      const uncompressed = Buffer.concat([Buffer.from([4]), reduced, y]);
+      for (const value of [x, Buffer.concat([Buffer.alloc(1), reduced])]) {
+        PublicKey.fromDER(Buffer.concat([Buffer.from([2]), value])).toString().should.equal(compressed.toString('hex'));
+      }
+      PublicKey.fromDER(Buffer.concat([Buffer.from([4]), x, y])).toString().should.equal(uncompressed.toString('hex'));
+      const hybrid = Buffer.concat([Buffer.from([6]), x, y]);
+      PublicKey.fromDER(hybrid, false).toString().should.equal(uncompressed.toString('hex'));
+      (function() { PublicKey.fromDER(hybrid); }).should.throw('Invalid DER format public key');
+    });
+
     it('should parse this uncompressed public key', function() {
       var pk = PublicKey.fromDER(Buffer.from('041ff0fe0f7b15ffaa85ff9f4744d539139c252a49710fb053bb9f2b933173ff9a7baad41d04514751e6851f5304fd243751703bed21b914f6be218c0fa354a341', 'hex'));
       pk.point.getX().toString(16).should.equal('1ff0fe0f7b15ffaa85ff9f4744d539139c252a49710fb053bb9f2b933173ff9a');

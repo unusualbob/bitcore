@@ -3,7 +3,7 @@
 
 const assert = require('assert');
 const buffer = require('buffer');
-const { encodePath, isNativeBuffer, parentFingerPrint, checkResult, checkPublicPrefix } = require('./crypto/bip32-native');
+const { encodePath, isNativeBuffer, parentFingerPrint, checkResult, checkPublicPrefix, hasStandardBNEncoding } = require('./crypto/bip32-native');
 const BN = require('./crypto/bn');
 const { native } = require('./crypto/ecdsa-native');
 const Hash = require('./crypto/hash');
@@ -22,7 +22,6 @@ const hdErrors = errors.HDPrivateKey;
 const MINIMUM_ENTROPY_BITS = 128;
 const BITS_TO_BYTES = 1 / 8;
 const MAXIMUM_ENTROPY_BITS = 512;
-const bnToBuffer = BN.prototype.toBuffer;
 const isValidPrivateKey = PrivateKey.isValid;
 
 
@@ -310,7 +309,7 @@ function deriveNativeChild(parent, indexes, nonCompliant) {
   }
 
   const bn = parent.privateKey.bn;
-  if (bn.toBuffer !== bnToBuffer || bn.isNeg() || bn.byteLength() > 32) {
+  if (!hasStandardBNEncoding(bn) || bn.isNeg() || bn.byteLength() > 32) {
     return;
   }
 

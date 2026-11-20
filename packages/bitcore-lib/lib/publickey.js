@@ -1,15 +1,15 @@
 'use strict';
 
+const { hasStandardBNEncoding } = require('./crypto/bip32-native');
 const BN = require('./crypto/bn');
 const { native } = require('./crypto/ecdsa-native');
 const Hash = require('./crypto/hash');
 const Point = require('./crypto/point');
 const TaggedHash = require('./crypto/taggedhash');
+const { supportedBuffer, checkBuffer } = require('./crypto/taproot-native');
 const Network = require('./networks');
 const JSUtil = require('./util/js');
 const $ = require('./util/preconditions');
-
-const bnToBuffer = BN.prototype.toBuffer;
 
 /**
  * Instantiate a PublicKey from a {@link PrivateKey}, {@link Point}, `string`, or `Buffer`.
@@ -50,6 +50,15 @@ function PublicKey(data, extra) {
   }
   extra = extra || {};
 
+  if (typeof native?.publicKeyParse === 'function' &&
+      (typeof data === 'string' || (PublicKey._isBuffer(data) && !(data.x && data.y)))) {
+    const encoded = typeof data === 'string' ? Buffer.from(data, 'hex') : data;
+    const parsed = parseNativeDER(encoded);
+    if (parsed) {
+      parsed.network = extra.network === undefined ? undefined : Network.get(extra.network);
+      return initialize(this, parsed);
+    }
+  }
   const info = this._classifyArgs(data, extra);
 
   // validation
@@ -68,9 +77,26 @@ function initialize(publicKey, info) {
   return publicKey;
 }
 
+function pointFromNativeSEC(sec) {
+  if (!Buffer.isBuffer(sec) || sec.length !== 65 || sec[0] !== 4) {
+    throw new Error('Invalid uncompressed native public key');
+  }
+  return Point.getG().curve.point(new BN(sec.subarray(1, 33)), new BN(sec.subarray(33, 65)));
+}
+
+function parseNativeDER(data) {
+  if (typeof native?.publicKeyParse !== 'function' || !PublicKey._isBuffer(data) ||
+      (data.length !== 33 && data.length !== 65)) return;
+  const sec = Buffer.from(data);
+  const compressed = sec.length === 33;
+  if (compressed ? sec[0] !== 2 && sec[0] !== 3 : sec[0] !== 4) return;
+  const validated = native.publicKeyParse(sec);
+  if (validated) return { point: pointFromNativeSEC(validated), compressed };
+}
+
 function createNativePoint(bn) {
   if (typeof native?.publicKeyCreate !== 'function' || !(bn instanceof BN) ||
-      bn.toBuffer !== bnToBuffer || bn.isNeg() || bn.byteLength() > 32) {
+      !hasStandardBNEncoding(bn) || bn.isNeg() || bn.byteLength() > 32) {
     return;
   }
 
@@ -78,11 +104,7 @@ function createNativePoint(bn) {
   try {
     const sec = native.publicKeyCreate(secret, false);
     if (sec) {
-      if (!Buffer.isBuffer(sec) || sec.length !== 65 || sec[0] !== 4) {
-        throw new Error('Invalid uncompressed native public key');
-      }
-      // The addon has already constructed a valid curve point.
-      return Point.getG().curve.point(new BN(sec.subarray(1, 33)), new BN(sec.subarray(33, 65)));
+      return pointFromNativeSEC(sec);
     }
   } finally {
     secret.fill(0);
@@ -286,6 +308,8 @@ PublicKey.fromBuffer = function(buf, strict) {
  */
 PublicKey.fromDER = function(buf, strict) {
   $.checkArgument(PublicKey._isBuffer(buf), 'Must be a hex buffer of DER encoded public key');
+  const parsed = parseNativeDER(buf);
+  if (parsed) return initialize(Object.create(PublicKey.prototype), parsed);
   const info = PublicKey._transformDER(buf, strict);
   return new PublicKey(info.point, {
     compressed: info.compressed
@@ -315,10 +339,7 @@ PublicKey.fromPoint = function(point, compressed) {
  */
 PublicKey.fromString = function(str, encoding) {
   const buf = Buffer.from(str, encoding || 'hex');
-  const info = PublicKey._transformDER(buf);
-  return new PublicKey(info.point, {
-    compressed: info.compressed
-  });
+  return PublicKey.fromDER(buf);
 };
 
 /**
@@ -387,6 +408,18 @@ PublicKey.prototype.computeTapTweakHash = function(merkleRoot) {
   return tweakHash;
 };
 
+function nativeTapTweak(publicKey, tweak) {
+  if (typeof native?.taprootPublicTweak !== 'function' || !supportedBuffer(tweak, 32) ||
+      !(publicKey instanceof PublicKey)) return;
+
+  const x = publicKey.point.getX().toBuffer({ size: 32 });
+  if (!supportedBuffer(x, 32)) return;
+  const result = native.taprootPublicTweak(x, tweak);
+  if (result === null) return;
+  const bytes = checkBuffer(result, 33);
+  return { parity: bytes[0], tweakedPubKey: bytes.subarray(1) };
+}
+
 
 /**
  * Verify a tweaked public key against this key
@@ -400,6 +433,11 @@ PublicKey.prototype.checkTapTweak = function(p, merkleRoot, control) {
     p = PublicKey.fromTaproot(p);
   }
   const tweak = p.computeTapTweakHash(merkleRoot);
+
+  const nativeTweak = nativeTapTweak(p, tweak);
+  if (nativeTweak && this instanceof PublicKey) {
+    return this.point.getX().eq(BN.fromBuffer(nativeTweak.tweakedPubKey)) && nativeTweak.parity === (control[0] & 1);
+  }
 
   const P = p.point.liftX();
   const Q = P.add(this.point.curve.g.mul(BN.fromBuffer(tweak)));
@@ -418,6 +456,8 @@ PublicKey.prototype.createTapTweak = function(merkleRoot) {
   $.checkArgument(merkleRoot == null || (Buffer.isBuffer(merkleRoot) && merkleRoot.length === 32), 'merkleRoot must be a 32 byte buffer');
 
   let t = this.computeTapTweakHash(merkleRoot);
+  const nativeTweak = nativeTapTweak(this, t);
+  if (nativeTweak) return nativeTweak;
   t = new BN(t);
   const Q = this.point.liftX().add(Point.getG().mul(t));
   const parity = Q.y.isEven() ? 0 : 1;

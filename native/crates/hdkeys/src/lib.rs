@@ -7,6 +7,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 const HARDENED: u32 = 1 << 31;
 
+/// Return canonical affine coordinates only after libsecp256k1 validates the point.
+pub fn parse_public_key(sec: &[u8]) -> Option<[u8; 65]> {
+    if !matches!((sec.len(), sec.first()), (33, Some(2 | 3)) | (65, Some(4))) {
+        return None;
+    }
+    Some(PublicKey::from_slice(sec).ok()?.serialize_uncompressed())
+}
+
 pub struct PrivateChild {
     pub secret_key: [u8; 32],
     pub chain_code: [u8; 32],

@@ -4,6 +4,7 @@ var nodeCrypto = require('crypto');
 var Scrypt = require('scryptsy');
 var BufferUtil = require('../util/buffer');
 var $ = require('../util/preconditions');
+const { native } = require('./ecdsa-native');
 
 var Hash = module.exports;
 
@@ -85,8 +86,27 @@ Hash.sha512hmac = function(data, key) {
   return Hash.hmac(Hash.sha512, data, key);
 };
 
-// Litecoin Scrypt hashing
 Hash.scrypt = function(buf) {
   $.checkArgument(BufferUtil.isBuffer(buf));
+  if (!nodeCrypto.getFips?.()) {
+    if (typeof native?.scryptProofOfWork === 'function' && buf.length === 80 && buf.buffer instanceof ArrayBuffer) {
+      return native.scryptProofOfWork(buf).reverse();
+    }
+    if (typeof nodeCrypto.scryptSync === 'function') {
+      let hash;
+      try {
+        hash = nodeCrypto.scryptSync(buf, buf, 32, { N: 1024, r: 1, p: 1 });
+      } catch (error) {
+        // Node can report an unavailable provider through its parameter check.
+        const unsupported = error?.code === 'ERR_CRYPTO_SCRYPT_NOT_SUPPORTED' ||
+          error?.code === 'ERR_OSSL_EVP_UNSUPPORTED' ||
+          (error?.code === 'ERR_CRYPTO_INVALID_SCRYPT_PARAMS' &&
+            typeof error.message === 'string' && error.message.endsWith('digital envelope routines::unsupported'));
+        if (!unsupported) throw error;
+        hash = Scrypt(buf, buf, 1024, 1, 1, 32);
+      }
+      return hash.reverse();
+    }
+  }
   return BufferUtil.reverse(Scrypt(buf, buf, 1024, 1, 1, 32));
 };

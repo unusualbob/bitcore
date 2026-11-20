@@ -97,6 +97,9 @@ BN.prototype.toBuffer = function(opts) {
   return buf;
 };
 
+// All four libraries may share the same bn.js prototype in a wallet process.
+Object.defineProperty(BN.prototype.toBuffer, Symbol.for('@bitpay-labs/bitcore.bn.toBuffer'), { value: true });
+
 BN.prototype.toSMBigEndian = function() {
   var buf;
   if (this.cmp(BN.Zero) === -1) {

@@ -20,7 +20,10 @@ export class EthDeriver implements IDeriver {
   }
 
   addressFromPublicKeyBuffer(pubKey: Buffer): string {
-    const ecPoint = new BitcoreLib.PublicKey.fromBuffer(pubKey).point;
+    return this.addressFromPoint(BitcoreLib.PublicKey.fromBuffer(pubKey).point);
+  }
+
+  private addressFromPoint(ecPoint): string {
     const x = ecPoint.getX().toBuffer({ size: 32 });
     const y = ecPoint.getY().toBuffer({ size: 32 });
     const paddedBuffer = Buffer.concat([x, y]);
@@ -37,7 +40,7 @@ export class EthDeriver implements IDeriver {
   deriveAddressWithPath(network: string, xpubKey: string, path: string) {
     const xpub = new BitcoreLib.HDPublicKey(xpubKey, network);
     const derived = xpub.derive(path).publicKey;
-    return this.addressFromPublicKeyBuffer(derived.toBuffer());
+    return this.addressFromPoint(derived.point);
   }
 
   derivePrivateKeyWithPath(network: string, xprivKey: string, path: string) {
@@ -46,12 +49,14 @@ export class EthDeriver implements IDeriver {
     const privKey = derivedPrivKey.privateKey.toString('hex');
     const pubKeyObj = derivedPrivKey.publicKey;
     const pubKey = pubKeyObj.toString('hex');
-    const pubKeyBuffer = pubKeyObj.toBuffer();
-    const address = this.addressFromPublicKeyBuffer(pubKeyBuffer);
+    const address = this.addressFromPoint(pubKeyObj.point);
     return { address, privKey, pubKey, path };
   }
 
   getAddress(network: string, pubKey) {
+    if (typeof pubKey === 'string' || Buffer.isBuffer(pubKey)) {
+      return this.addressFromPoint(new BitcoreLib.PublicKey(pubKey, network).point);
+    }
     pubKey = new BitcoreLib.PublicKey(pubKey, network); // network not needed here since ETH doesn't differentiate addresses by network.
     return this.addressFromPublicKeyBuffer(pubKey.toBuffer());
   }

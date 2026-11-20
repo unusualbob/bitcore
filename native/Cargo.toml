@@ -1,5 +1,13 @@
 [workspace]
-members = ["crates/ecdsa", "crates/hdkeys", "crates/node", "crates/secp-context"]
+members = [
+    "crates/bch-schnorr",
+    "crates/ecdsa",
+    "crates/hdkeys",
+    "crates/kdfs",
+    "crates/node",
+    "crates/secp-context",
+    "crates/taproot",
+]
 resolver = "2"
 
 [workspace.package]

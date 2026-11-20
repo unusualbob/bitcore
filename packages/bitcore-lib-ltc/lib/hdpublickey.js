@@ -4,6 +4,8 @@ var _ = require('lodash');
 var $ = require('./util/preconditions');
 
 var BN = require('./crypto/bn');
+const { native } = require('./crypto/ecdsa-native');
+const { encodePath, isNativeBuffer, parentFingerPrint, checkResult, checkPublicPrefix } = require('./crypto/bip32-native');
 var Base58 = require('./encoding/base58');
 var Base58Check = require('./encoding/base58check');
 var Hash = require('./crypto/hash');
@@ -11,6 +13,9 @@ var HDPrivateKey = require('./hdprivatekey');
 var Network = require('./networks');
 var Point = require('./crypto/point');
 var PublicKey = require('./publickey');
+
+const publicKeyFromPoint = PublicKey.fromPoint;
+const publicKeyToBuffer = PublicKey.prototype.toBuffer;
 
 var bitcoreErrors = require('./errors');
 var errors = bitcoreErrors;
@@ -154,6 +159,11 @@ HDPublicKey.prototype._deriveWithNumber = function(index, hardened) {
     throw new hdErrors.InvalidPath(index);
   }
 
+  const nativeChild = deriveNativeChild(this, [index]);
+  if (nativeChild) {
+    return nativeChild;
+  }
+
   var indexBuffer = BufferUtil.integerAsBuffer(index);
   var data = BufferUtil.concat([this.publicKey.toBuffer(), indexBuffer]);
   var hash = Hash.sha512hmac(data, this._buffers.chainCode);
@@ -179,6 +189,8 @@ HDPublicKey.prototype._deriveWithNumber = function(index, hardened) {
   return derived;
 };
 
+const deriveWithNumber = HDPublicKey.prototype._deriveWithNumber;
+
 HDPublicKey.prototype._deriveFromString = function(path) {
   /* jshint maxcomplexity: 8 */
   if (_.includes(path, "'")) {
@@ -188,12 +200,58 @@ HDPublicKey.prototype._deriveFromString = function(path) {
   }
 
   var indexes = HDPrivateKey._getDerivationIndexes(path);
+  const nativeChild = this._deriveWithNumber === deriveWithNumber && deriveNativeChild(this, indexes);
+  if (nativeChild) {
+    return nativeChild;
+  }
+
   var derived = indexes.reduce(function(prev, index) {
     return prev._deriveWithNumber(index);
   }, this);
 
   return derived;
 };
+
+function deriveNativeChild(parent, indexes) {
+  if (typeof native?.derivePublicPath !== 'function' || !parent.network ||
+      PublicKey.fromPoint !== publicKeyFromPoint || parent.publicKey.toBuffer !== publicKeyToBuffer) {
+    return;
+  }
+
+  const chainCode = parent._buffers.chainCode;
+  const path = encodePath(indexes, chainCode);
+  if (!path) {
+    return;
+  }
+  try {
+    // Re-parsing compressed bytes would recover a different Y if the point was mutated off curve.
+    if (!Point.getG().curve.validate(parent.publicKey.point)) {
+      return;
+    }
+  } catch {
+    return;
+  }
+  const publicKey = parent.publicKey.toBuffer();
+  if (!isNativeBuffer(publicKey, 33)) {
+    return;
+  }
+
+  const child = native.derivePublicPath(publicKey, chainCode, path);
+  if (child) {
+    checkResult(child, 98);
+    checkPublicPrefix(child[0]);
+    if (indexes.length > 1) checkPublicPrefix(child[65]);
+    // The addon returns the 33-byte child public key, 32-byte chain code and 33-byte parent public key.
+    return new HDPublicKey({
+      network: parent.network,
+      depth: parent.depth + indexes.length,
+      parentFingerPrint: parentFingerPrint(parent, indexes, child.subarray(65, 98)),
+      childIndex: indexes[indexes.length - 1],
+      chainCode: child.subarray(33, 65),
+      publicKey: child.subarray(0, 33)
+    });
+  }
+}
 
 /**
  * Verifies that a given serialized public key in base58 with checksum format
@@ -261,8 +319,19 @@ HDPublicKey._validateNetwork = function(data, networkArg) {
 
 HDPublicKey.prototype._buildFromPrivate = function (arg) {
   var args = _.clone(arg._buffers);
-  var point = Point.getG().mul(BN.fromBuffer(args.privateKey));
-  args.publicKey = Point.pointToCompressed(point);
+  let publicKey;
+  if (typeof native?.publicKeyCreate === 'function' && isNativeBuffer(args.privateKey, 32)) {
+    publicKey = native.publicKeyCreate(args.privateKey, true);
+    if (publicKey) {
+      checkResult(publicKey, 33);
+      checkPublicPrefix(publicKey[0]);
+    }
+  }
+  if (!publicKey) {
+    const point = Point.getG().mul(BN.fromBuffer(args.privateKey));
+    publicKey = Point.pointToCompressed(point);
+  }
+  args.publicKey = publicKey;
   args.version = BufferUtil.integerAsBuffer(Network.get(BufferUtil.integerFromBuffer(args.version)).xpubkey);
   args.privateKey = undefined;
   args.checksum = undefined;

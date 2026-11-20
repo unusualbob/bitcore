@@ -1,7 +1,28 @@
-/* eslint-disable no-bitwise */
+/* eslint-disable no-bitwise, @typescript-eslint/no-require-imports */
 'use strict';
 
 const crypto = require('crypto');
+
+const MAX_NATIVE_INPUT_BYTES = 4096;
+const isNode = typeof process !== 'undefined' && !!process.versions?.node;
+
+let native;
+if (isNode && typeof module.require === 'function') {
+  const path = '@bitpay-labs/bitcore-lib/lib/crypto/ecdsa-native';
+  try {
+    ({ native } = module.require(path));
+  } catch (err) {
+    // Published versions of bitcore-lib can predate the optional addon loader.
+    if (err.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED' &&
+        (err.code !== 'MODULE_NOT_FOUND' || !err.message.startsWith(`Cannot find module '${path}'`))) {
+      throw err;
+    }
+  }
+}
+
+function canUseNative(bytes) {
+  return bytes.length > 0 && bytes.length <= MAX_NATIVE_INPUT_BYTES && bytes.buffer instanceof ArrayBuffer;
+}
 
 /**
  * PBKDF2
@@ -25,14 +46,51 @@ function pbkdf2(key, salt, iterations, dkLen) {
     throw new TypeError('salt must a string or Buffer');
   }
 
-  if (typeof key === 'string') {
+  const ownsKey = typeof key === 'string';
+  const ownsSalt = typeof salt === 'string';
+  if (ownsKey) {
     key = Buffer.from(key);
   }
 
-  if (typeof salt === 'string') {
+  if (ownsSalt) {
     salt = Buffer.from(salt);
   }
 
+  try {
+    if (isNode && iterations === 2048 && dkLen === 64 && !crypto.getFips?.()) {
+      if (typeof native?.bip39Seed === 'function' && canUseNative(key) && canUseNative(salt)) {
+        return native.bip39Seed(key, salt);
+      }
+      if (typeof crypto.pbkdf2Sync === 'function') {
+        try {
+          return crypto.pbkdf2Sync(key, salt, iterations, dkLen, 'sha512');
+        } catch (error) {
+          const unsupported = error?.code === 'ERR_OSSL_EVP_UNSUPPORTED' || error?.code === 'ERR_CRYPTO_INVALID_DIGEST';
+          if (!unsupported) throw error;
+          return pbkdf2AfterProviderFailure(key, salt, iterations, dkLen, hLen);
+        }
+      }
+    }
+    return pbkdf2Legacy(key, salt, iterations, dkLen, hLen);
+  } finally {
+    if (ownsKey) key.fill(0);
+    if (ownsSalt) salt.fill(0);
+  }
+}
+
+function pbkdf2AfterProviderFailure(key, salt, iterations, dkLen, hLen) {
+  // HMAC-SHA512 hashes keys longer than its 128-byte block. Normalize once so
+  // a long input is hashed only once over the fixed BIP39 derivation.
+  if (key.length <= 128) return pbkdf2Legacy(key, salt, iterations, dkLen, hLen);
+  const normalizedKey = crypto.createHash('sha512').update(key).digest();
+  try {
+    return pbkdf2Legacy(normalizedKey, salt, iterations, dkLen, hLen);
+  } finally {
+    normalizedKey.fill(0);
+  }
+}
+
+function pbkdf2Legacy(key, salt, iterations, dkLen, hLen) {
   var DK = Buffer.alloc(dkLen);
 
   var U = Buffer.alloc(hLen);

@@ -1,15 +1,18 @@
 'use strict';
 
 const Address = require('./address');
+const { hasStandardBNEncoding } = require('./crypto/bip32-native');
 const BN = require('./crypto/bn');
 const Point = require('./crypto/point');
 const Random = require('./crypto/random');
 const TaggedHash = require('./crypto/taggedhash');
+const { native, usesDefaultTaggedHash, supportedBuffer, checkBuffer } = require('./crypto/taproot-native');
 const Base58Check = require('./encoding/base58check');
 const Networks = require('./networks');
 const PublicKey = require('./publickey');
 const JSUtil = require('./util/js');
 const $ = require('./util/preconditions');
+
 
 /**
  * Instantiate a PrivateKey from a BN, Buffer and WIF.
@@ -392,6 +395,17 @@ PrivateKey.prototype.toObject = PrivateKey.prototype.toJSON = function toObject(
  * @returns {{ tweakedPrivKey: Buffer }}
  */
 PrivateKey.prototype.createTapTweak = function(merkleRoot) {
+  if (typeof native?.taprootPrivateTweak === 'function' && usesDefaultTaggedHash() &&
+      (!merkleRoot || supportedBuffer(merkleRoot, 32)) && this.bn instanceof BN &&
+      hasStandardBNEncoding(this.bn) && !this.bn.isNeg() && this.bn.byteLength() <= 32) {
+    const secretKey = this.bn.toBuffer({ size: 32 });
+    try {
+      const result = native.taprootPrivateTweak(secretKey, merkleRoot || undefined);
+      if (result !== null) return { tweakedPrivKey: checkBuffer(result, 32) };
+    } finally {
+      secretKey.fill(0);
+    }
+  }
   const order = Point.getN();
   const P = Point.getG().mul(this.bn);
   const secKey = P.y.isEven() ? this.bn : order.sub(this.bn);

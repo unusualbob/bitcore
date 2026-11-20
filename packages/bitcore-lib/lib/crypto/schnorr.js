@@ -1,9 +1,10 @@
-const crypto = require('crypto');
-const $ = require('../util/preconditions');
+const nodeCrypto = require('crypto');
 const JS = require('../util/js');
+const $ = require('../util/preconditions');
 const BN = require('./bn');
 const Point = require('./point');
 const TaggedHash = require('./taggedhash');
+const { native, usesDefaultTaggedHash, supportedBuffer, checkBuffer } = require('./taproot-native');
 
 const Schnorr = function Schnorr() {
   if (!(this instanceof Schnorr)) {
@@ -30,18 +31,25 @@ Schnorr.sign = function(privateKey, message, aux) {
 
   if (typeof message === 'string') {
     $.checkArgument(JS.isHexaString(message), 'Schnorr message string is not hex');
-    message = Buffer.from(message, 'hex')
+    message = Buffer.from(message, 'hex');
   }
   $.checkArgument($.isType(message, 'Buffer'), 'Schnorr message must be a hex string or buffer');
 
   if (!aux) {
-    aux = crypto.randomBytes(32);
+    aux = nodeCrypto.randomBytes(32);
   }
   if (typeof aux === 'string') {
     $.checkArgument(JS.isHexaString(aux), 'Schnorr aux string is not hex');
-    aux = Buffer.from(aux, 'hex')
+    aux = Buffer.from(aux, 'hex');
   }
   $.checkArgument($.isType(aux, 'Buffer'), 'Schnorr aux must be a hex string or buffer');
+
+  if (typeof native?.schnorrSign === 'function' && Schnorr.verify === verify &&
+      usesDefaultTaggedHash() && supportedBuffer(privateKey, 32) &&
+      supportedBuffer(message, 32) && supportedBuffer(aux, 32)) {
+    const result = native.schnorrSign(privateKey, message, aux);
+    if (result !== null) return checkBuffer(result, 64);
+  }
 
   const G = Point.getG();
   const n = Point.getN();
@@ -110,6 +118,12 @@ Schnorr.verify = function(publicKey, message, signature) {
     throw new Error('Signature should be a 64 byte buffer. Got ' + signature.length + ' bytes');
   }
 
+  if (typeof native?.schnorrVerify === 'function' && usesDefaultTaggedHash() &&
+      supportedBuffer(publicKey, 32) && supportedBuffer(message, 32) && supportedBuffer(signature, 64)) {
+    const result = native.schnorrVerify(publicKey, message, signature);
+    if (typeof result === 'boolean') return result;
+  }
+
   try {
     const p = Point.getP();
     const n = Point.getN();
@@ -127,10 +141,12 @@ Schnorr.verify = function(publicKey, message, signature) {
       return false;
     }
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 };
+
+const verify = Schnorr.verify;
 
 /* Utility function used in Verify() */
 const getE = function(r, P, message) {

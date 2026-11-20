@@ -7,6 +7,8 @@ var _ = require('lodash');
 var $ = require('./util/preconditions');
 
 var BN = require('./crypto/bn');
+const { native } = require('./crypto/ecdsa-native');
+const { encodePath, isNativeBuffer, parentFingerPrint, checkResult, checkPublicPrefix, hasStandardBNEncoding } = require('./crypto/bip32-native');
 var Base58 = require('./encoding/base58');
 var Base58Check = require('./encoding/base58check');
 var Hash = require('./crypto/hash');
@@ -14,6 +16,8 @@ var Network = require('./networks');
 var HDKeyCache = require('./hdkeycache');
 var Point = require('./crypto/point');
 var PrivateKey = require('./privatekey');
+
+const isValidPrivateKey = PrivateKey.isValid;
 var Random = require('./crypto/random');
 
 var errors = require('./errors');
@@ -182,6 +186,14 @@ HDPrivateKey.prototype._deriveWithNumber = function(index, hardened) {
     return cached;
   }
 
+  if (!hardened || index >= HDPrivateKey.Hardened) {
+    const nativeChild = deriveNativeChild(this, [index]);
+    if (nativeChild) {
+      HDKeyCache.set(this.xprivkey, index, hardened, nativeChild);
+      return nativeChild;
+    }
+  }
+
   var indexBuffer = BufferUtil.integerAsBuffer(index);
   var data;
   if (hardened) {
@@ -231,6 +243,52 @@ HDPrivateKey.prototype._deriveFromString = function(path) {
 
   return derived;
 };
+
+function deriveNativeChild(parent, indexes) {
+  if (typeof native?.derivePrivatePath !== 'function' || !parent.network ||
+      PrivateKey.isValid !== isValidPrivateKey) {
+    return;
+  }
+
+  const bn = parent.privateKey.bn;
+  if (!hasStandardBNEncoding(bn) || bn.isNeg() || bn.byteLength() > 32) {
+    return;
+  }
+
+  const chainCode = parent._buffers.chainCode;
+  const path = encodePath(indexes, chainCode);
+  if (!path) {
+    return;
+  }
+  let publicKey;
+  if (indexes[0] < HDPrivateKey.Hardened) {
+    publicKey = parent.publicKey.toBuffer();
+    if (!isNativeBuffer(publicKey, 33)) {
+      return;
+    }
+  }
+  const secret = bn.toBuffer({ size: 32 });
+  let child;
+  try {
+    child = native.derivePrivatePath(secret, chainCode, path, false, publicKey);
+    if (child) {
+      checkResult(child, 97);
+      if (indexes.length > 1) checkPublicPrefix(child[64]);
+      // The addon returns 32 bytes of secret, 32 bytes of chain code and 33 bytes of parent public key.
+      return new HDPrivateKey({
+        network: parent.network,
+        depth: parent.depth + indexes.length,
+        parentFingerPrint: parentFingerPrint(parent, indexes, child.subarray(64, 97)),
+        childIndex: indexes[indexes.length - 1],
+        chainCode: Buffer.from(child.subarray(32, 64)),
+        privateKey: Buffer.from(child.subarray(0, 32))
+      });
+    }
+  } finally {
+    secret.fill(0);
+    if (Buffer.isBuffer(child)) child.fill(0);
+  }
+}
 
 /**
  * Verifies that a given serialized private key in base58 with checksum format
