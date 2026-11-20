@@ -24,3 +24,5 @@ bitcore-lib.js
 bitcore-lib.min.js
 bitcore-test.local.config.json
 .worktrees
+/native/target/
+/packages/bitcore-lib/lib/native/*.node

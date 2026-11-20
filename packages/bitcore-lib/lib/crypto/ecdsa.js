@@ -1,33 +1,71 @@
 'use strict';
 
-const BN = require('./bn');
-const Point = require('./point');
-const Signature = require('./signature');
 const PublicKey = require('../publickey');
-const Random = require('./random');
-const Hash = require('./hash');
 const BufferUtil = require('../util/buffer');
 const $ = require('../util/preconditions');
+const BN = require('./bn');
+const { native } = require('./ecdsa-native');
+const Hash = require('./hash');
+const Point = require('./point');
+const Random = require('./random');
+const Signature = require('./signature');
+
+const isScalar = (value, order) => value.gt(BN.Zero) && value.lt(order);
+
+const toCompactSignature = (r, s) => Buffer.concat([
+  r.toBuffer({ size: 32 }),
+  s.toBuffer({ size: 32 })
+]);
+
+const toUncompressedKey = point => Buffer.concat([
+  Buffer.from([0x04]),
+  point.getX().toBuffer({ size: 32 }),
+  point.getY().toBuffer({ size: 32 })
+]);
+
+const recoverNative = function(hashbuf, sig, i, uncompressed = false) {
+  if (!native || !BufferUtil.isBuffer(hashbuf) || hashbuf.length !== 32 || !(sig instanceof Signature)) {
+    return;
+  }
+
+  const { r, s } = sig;
+  const n = Point.getN();
+  if (r instanceof BN && s instanceof BN && isScalar(r, n) && isScalar(s, n)) {
+    const compressed = sig.compressed;
+    if (compressed === undefined || typeof compressed === 'boolean') {
+      return native.recover(Buffer.from(hashbuf), toCompactSignature(r, s), i, !uncompressed && compressed !== false);
+    }
+  }
+};
 
 
 /**
  * Attach the recovery factor i to an ECDSA signature.
  * @param {Buffer} hashbuf
  * @param {Signature} sig
- * @param {PulicKey} pubkey
+ * @param {PublicKey} pubkey
  * @returns {Signature}
  */
 const calci = function(hashbuf, sig, pubkey) {
+  const expectedKey = native && pubkey instanceof PublicKey && pubkey.point instanceof Point &&
+    !pubkey.point.isInfinity() ? toUncompressedKey(pubkey.point) : undefined;
+
   for (var i = 0; i < 4; i++) {
-    var Qprime;
+    let recoveredKey;
+    let recovered;
     try {
-      Qprime = getPublicKey(hashbuf, sig, i);
+      if (expectedKey) {
+        recoveredKey = recoverNative(hashbuf, sig, i, true);
+      }
+      if (!recoveredKey) {
+        recovered = recoverInJavaScript(hashbuf, sig, i);
+      }
     } catch (e) {
       console.error(e);
       continue;
     }
 
-    if (Qprime.point.eq(pubkey.point)) {
+    if (recoveredKey ? recoveredKey.equals(expectedKey) : recovered.point.eq(pubkey.point)) {
       sig.i = i;
       sig.compressed = pubkey.compressed;
       return sig;
@@ -46,13 +84,12 @@ const calci = function(hashbuf, sig, pubkey) {
  * @param {Number} i
  * @returns {PublicKey}
  */
-const getPublicKey = function(hashbuf, sig, i) {
+const recoverInJavaScript = function(hashbuf, sig, i) {
   /* jshint maxstatements: 25 */
-  $.checkArgument(i === 0 || i === 1 || i === 2 || i === 3, new Error('i must be equal to 0, 1, 2, or 3'));
-
   var e = BN.fromBuffer(hashbuf);
   var r = sig.r;
   var s = sig.s;
+  var n = Point.getN();
 
   // A set LSB signifies that the y-coordinate is odd
   var isYOdd = i & 1;
@@ -61,7 +98,6 @@ const getPublicKey = function(hashbuf, sig, i) {
   // first or second candidate key.
   var isSecondKey = i >> 1;
 
-  var n = Point.getN();
   var G = Point.getG();
 
   // 1.1 Let x = r + jn
@@ -82,12 +118,18 @@ const getPublicKey = function(hashbuf, sig, i) {
   // Q = r^-1 (sR + -eG)
   var rInv = r.invm(n);
 
-  //var Q = R.multiplyTwo(s, G, eNeg).mul(rInv);
+  // var Q = R.multiplyTwo(s, G, eNeg).mul(rInv);
   var Q = R.mul(s).add(G.mul(eNeg)).mul(rInv);
 
   var pubkey = PublicKey.fromPoint(Q, sig.compressed);
 
   return pubkey;
+};
+
+const getPublicKey = function(hashbuf, sig, i) {
+  $.checkArgument(i === 0 || i === 1 || i === 2 || i === 3, new Error('i must be equal to 0, 1, 2, or 3'));
+  const key = recoverNative(hashbuf, sig, i);
+  return key ? PublicKey.fromBuffer(key) : recoverInJavaScript(hashbuf, sig, i);
 };
 
 
@@ -195,8 +237,27 @@ const sign = function(hashbuf, privkey, opts) {
     hashbuf.reverse();
   }
 
-  var e = BN.fromBuffer(hashbuf);
   var N = Point.getN();
+
+  if (native && !randomK && d instanceof BN && isScalar(d, N)) {
+    const key = d.toBuffer({ size: 32 });
+    let compact;
+    try {
+      compact = native.sign(hashbuf, key);
+    } finally {
+      key.fill(0);
+    }
+    if (compact) {
+      return new Signature({
+        r: BN.fromBuffer(compact.subarray(0, 32)),
+        s: BN.fromBuffer(compact.subarray(32)),
+        compressed: privkey.publicKey.compressed
+      });
+    }
+    // For digests at or above N, seed the nonce with the original digest.
+  }
+
+  var e = BN.fromBuffer(hashbuf);
   var G = Point.getG();
   // try different values of k until r, s are valid
   var badrs = 0;
@@ -229,9 +290,10 @@ const sign = function(hashbuf, privkey, opts) {
  * @param {PublicKey} pubkey
  * @param {Object|undefined} opts An object of optional parameters
  * @param {String} opts.endian 'big' or 'little' (default: big)
+ * @param {Boolean} distinguishInfinity Whether to distinguish an infinite verification point
  * @returns {String|undefined} Returns an error string, or undefined if there is no error
  */
-const verificationError = function(hashbuf, sig, pubkey, opts) {
+const getVerificationError = function(hashbuf, sig, pubkey, opts, distinguishInfinity) {
   const { endian = 'big' } = opts || {};
 
   if (!BufferUtil.isBuffer(hashbuf) || hashbuf.length !== 32) {
@@ -240,12 +302,26 @@ const verificationError = function(hashbuf, sig, pubkey, opts) {
 
   var r = sig.r;
   var s = sig.s;
-  if (!(r.gt(BN.Zero) && r.lt(Point.getN())) || !(s.gt(BN.Zero) && s.lt(Point.getN()))) {
+  var n = Point.getN();
+  if (!isScalar(r, n) || !isScalar(s, n)) {
     return 'r and s not in range';
   }
 
+  if (native && r instanceof BN && s instanceof BN && pubkey instanceof PublicKey && !pubkey.point.isInfinity()) {
+    const digest = Buffer.from(hashbuf);
+    if (endian === 'little') {
+      digest.reverse();
+    }
+    const key = toUncompressedKey(pubkey.point);
+    if (native.verify(digest, toCompactSignature(r, s), key)) {
+      return;
+    }
+    if (!distinguishInfinity) {
+      return 'Invalid signature';
+    }
+  }
+
   var e = BN.fromBuffer(hashbuf, { endian });
-  var n = Point.getN();
   var sinv = s.invm(n);
   var u1 = sinv.mul(e).umod(n);
   var u2 = sinv.mul(r).umod(n);
@@ -260,6 +336,10 @@ const verificationError = function(hashbuf, sig, pubkey, opts) {
   }
 
   return; // no error
+};
+
+const verificationError = function(hashbuf, sig, pubkey, opts) {
+  return getVerificationError(hashbuf, sig, pubkey, opts, true);
 };
 
 
@@ -283,7 +363,7 @@ const verify = function(hashbuf, sig, pubkey, opts) {
   }
   sig = new Signature(sig);
 
-  return !verificationError(hashbuf, sig, pubkey, opts);
+  return !getVerificationError(hashbuf, sig, pubkey, opts, false);
 };
 
 module.exports = {

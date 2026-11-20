@@ -22,6 +22,8 @@ npm install
 cd packages/bitcore-lib
 ```
 
+For a local Node build with native ECDSA signing, verification, and public-key recovery, see the [Rust backend build instructions and benchmarks](../../native/README.md).
+
 ## Building the Browser Bundle
 
 To build a bitcore-lib full bundle for the browser:
