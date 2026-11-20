@@ -4,6 +4,8 @@ use bitcore_secp_context::{signing_context, verification_context};
 use secp256k1::ecdsa::{RecoverableSignature, RecoveryId, Signature};
 use secp256k1::{Message, PublicKey, SecretKey, constants};
 
+pub mod random_nonce;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     DigestOutOfRange,
@@ -45,6 +47,30 @@ pub fn sign(digest: &[u8; 32], secret_key: &[u8; 32]) -> Result<[u8; 64], Error>
     let signature = context.sign_ecdsa(Message::from_digest(*digest), &secret_key);
     secret_key.non_secure_erase();
     Ok(signature.serialize_compact())
+}
+
+/// Signs for RFC6979 callers which seed their nonce with the reduced digest.
+pub fn sign_recoverable(digest: &[u8; 32], secret_key: &[u8; 32]) -> Result<[u8; 65], Error> {
+    let context = signing_context().map_err(|_| Error::ContextRandomizationFailed)?;
+    let mut secret_key =
+        SecretKey::from_byte_array(*secret_key).map_err(|_| Error::InvalidSecretKey)?;
+    let signature = context.sign_ecdsa_recoverable(Message::from_digest(*digest), &secret_key);
+    secret_key.non_secure_erase();
+    let (recovery_id, signature) = signature.serialize_compact();
+    let mut packed = [0; 65];
+    packed[..64].copy_from_slice(&signature);
+    packed[64] = i32::from(recovery_id) as u8;
+    Ok(packed)
+}
+
+/// Produces a low-S, DER encoded RFC6979 signature for XRP.
+pub fn sign_der(digest: &[u8; 32], secret_key: &[u8; 32]) -> Result<Vec<u8>, Error> {
+    let context = signing_context().map_err(|_| Error::ContextRandomizationFailed)?;
+    let mut secret_key =
+        SecretKey::from_byte_array(*secret_key).map_err(|_| Error::InvalidSecretKey)?;
+    let signature = context.sign_ecdsa(Message::from_digest(*digest), &secret_key);
+    secret_key.non_secure_erase();
+    Ok(signature.serialize_der().to_vec())
 }
 
 /// Verifies a compact signature against a big-endian digest and SEC1 public key.

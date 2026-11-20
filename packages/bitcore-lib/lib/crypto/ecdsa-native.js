@@ -13,7 +13,9 @@ if (typeof module.require === 'function' && typeof process !== 'undefined' && pr
       // The ECDSA-only pilot had exactly these three entry points and no ABI version.
       const legacy = addon.abiVersion === undefined &&
         Object.keys(addon).sort().join(',') === 'recover,sign,verify';
-      if (addon.abiVersion === 2 || legacy) {
+      // ABI 2 shipped the earlier secp256k1 and KDF functions. New callers
+      // probe each optional export so previous local builds stay usable.
+      if (addon.abiVersion === 3 || addon.abiVersion === 2 || legacy) {
         native = addon;
       } else {
         const message = 'Incompatible Bitcore addon ABI. Rebuild with node native/build-node.cjs.';

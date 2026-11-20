@@ -24,6 +24,7 @@ import { AavePoolAbi } from '../abi/aavePool';
 import { AavePoolAbiV2 } from '../abi/aavePoolV2';
 import { ERC20Abi } from '../abi/erc20';
 import { MultisendAbi } from '../abi/multisend';
+import { checksumAddress } from '../checksum-address';
 import { EVMBlockStorage } from '../models/block';
 import { EVMTransactionStorage } from '../models/transaction';
 import { EVMTransactionJSON, IEVMBlock, IEVMTransaction, IEVMTransactionInProcess } from '../types';
@@ -236,7 +237,7 @@ export class BaseEVMStateProvider extends InternalStateProvider implements IChai
   private async getAaveV2UserAccountData(web3: Web3, poolAddress: string, address: string): Promise<AaveV2AccountData> {
     const contract = new web3.eth.Contract(AavePoolAbiV2, poolAddress);
     const accountData = await contract.methods
-      .getUserAccountData(web3.utils.toChecksumAddress(address))
+      .getUserAccountData(checksumAddress(address, web3.utils))
       .call();
 
     return {
@@ -252,7 +253,7 @@ export class BaseEVMStateProvider extends InternalStateProvider implements IChai
   private async getAaveV3UserAccountData(web3: Web3, poolAddress: string, address: string): Promise<AaveV3AccountData> {
     const contract = new web3.eth.Contract(AavePoolAbi, poolAddress);
     const accountData = await contract.methods
-      .getUserAccountData(web3.utils.toChecksumAddress(address))
+      .getUserAccountData(checksumAddress(address, web3.utils))
       .call();
 
     return {
@@ -278,7 +279,7 @@ export class BaseEVMStateProvider extends InternalStateProvider implements IChai
     const { web3 } = await this.getWeb3(network);
     const abi = version === 'v2' ? AavePoolAbiV2 : AavePoolAbi;
     const contract = new web3.eth.Contract(abi, poolAddress);
-    const reserveData = await contract.methods.getReserveData(web3.utils.toChecksumAddress(asset)).call();
+    const reserveData = await contract.methods.getReserveData(checksumAddress(asset, web3.utils)).call();
     return { currentVariableBorrowRate: reserveData.currentVariableBorrowRate.toString() };
   }
 
@@ -295,7 +296,7 @@ export class BaseEVMStateProvider extends InternalStateProvider implements IChai
     const { web3 } = await this.getWeb3(network);
     const abi = version === 'v2' ? AavePoolAbiV2 : AavePoolAbi;
     const contract = new web3.eth.Contract(abi, poolAddress);
-    const reserveData = await contract.methods.getReserveData(web3.utils.toChecksumAddress(asset)).call();
+    const reserveData = await contract.methods.getReserveData(checksumAddress(asset, web3.utils)).call();
     return { variableDebtTokenAddress: reserveData.variableDebtTokenAddress };
   }
 
@@ -721,7 +722,7 @@ export class BaseEVMStateProvider extends InternalStateProvider implements IChai
   async streamWalletTransactions(params: StreamWalletTransactionsParams) {
     const { network, wallet, args } = params;
     const { web3 } = await this.getWeb3(network);
-    args.tokenAddress = args.tokenAddress ? web3.utils.toChecksumAddress(args.tokenAddress) : undefined;
+    args.tokenAddress = args.tokenAddress ? checksumAddress(args.tokenAddress, web3.utils) : undefined;
 
     let transactionStream = new TransformWithEventPipe({ objectMode: true, passThrough: true });
     const walletAddresses = (await this.getWalletAddresses(wallet._id!)).map(waddres => waddres.address);

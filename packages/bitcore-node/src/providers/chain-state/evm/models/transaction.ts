@@ -16,6 +16,7 @@ import { ERC721Abi } from '../abi/erc721';
 import { InvoiceAbi } from '../abi/invoice';
 import { MultisendAbi } from '../abi/multisend';
 import { MultisigAbi } from '../abi/multisig';
+import { checksumAddress } from '../checksum-address';
 import type { IEVMNetworkConfig } from '../../../../types/Config';
 import type { StreamingFindOptions } from '../../../../types/Query';
 import type { TransformOptions } from '../../../../types/TransformOptions';
@@ -472,10 +473,10 @@ export class EVMTransactionModel extends BaseTransaction<IEVMTransaction> {
       if (!_to || !_value) return;
       return {
         type: 'ERC20:transfer',
-        to: Web3.utils.toChecksumAddress(_to),
-        from: Web3.utils.toChecksumAddress(from),
+        to: checksumAddress(_to),
+        from: checksumAddress(from),
         amount: Web3.utils.fromWei(_value, 'wei'),
-        contractAddress: Web3.utils.toChecksumAddress(to),
+        contractAddress: checksumAddress(to),
         callStack
       };
     } else if (`${abi.type}:${abi.name}` == 'ERC20:transferFrom') {
@@ -485,10 +486,10 @@ export class EVMTransactionModel extends BaseTransaction<IEVMTransaction> {
       if (!_to || !_from || !_value) return;
       return {
         type: 'ERC20:transfer',
-        to: Web3.utils.toChecksumAddress(_to),
-        from: Web3.utils.toChecksumAddress(_from),
+        to: checksumAddress(_to),
+        from: checksumAddress(_from),
         amount: Web3.utils.fromWei(_value, 'wei'),
-        contractAddress: Web3.utils.toChecksumAddress(to),
+        contractAddress: checksumAddress(to),
         callStack
       };
     } else if (`${abi.type}:${abi.name}` == 'MULTISIG:submitTransaction') {
@@ -498,19 +499,19 @@ export class EVMTransactionModel extends BaseTransaction<IEVMTransaction> {
       if (!destination || !value) return;
       return {
         type: 'MULTISIG:submitTransaction',
-        to: Web3.utils.toChecksumAddress(destination),
-        from: Web3.utils.toChecksumAddress(from),
+        to: checksumAddress(destination),
+        from: checksumAddress(from),
         amount: Web3.utils.fromWei(value, 'wei'),
-        contractAddress: Web3.utils.toChecksumAddress(to),
+        contractAddress: checksumAddress(to),
         callStack
       };
     } else if (`${abi.type}:${abi.name}` == 'MULTISIG:confirmTransaction') {
       return {
         type: 'MULTISIG:confirmTransaction',
         to: '0x0',
-        from: Web3.utils.toChecksumAddress(from),
+        from: checksumAddress(from),
         amount: '0',
-        contractAddress: Web3.utils.toChecksumAddress(to),
+        contractAddress: checksumAddress(to),
         callStack
       };
     }
@@ -519,8 +520,8 @@ export class EVMTransactionModel extends BaseTransaction<IEVMTransaction> {
 
   _getEffectForNativeTransfer(value: string, to: string, from: string, callStack: string): Effect {
     const effect = {
-      to: Web3.utils.toChecksumAddress(to),
-      from: Web3.utils.toChecksumAddress(from),
+      to: checksumAddress(to),
+      from: checksumAddress(from),
       amount: Web3.utils.fromWei(value, 'wei'),
       callStack
     };
@@ -543,8 +544,8 @@ export class EVMTransactionModel extends BaseTransaction<IEVMTransaction> {
   convertRawTx(chain: string, network: string, tx: Partial<Web3Types.TransactionInfo>, block?: IEVMBlock): IEVMTransactionInProcess {
     if (!block) {
       const txid = tx.hash as string || '';
-      const to = tx.to ? Web3.utils.toChecksumAddress(tx.to) : '';
-      const from = tx.from ? Web3.utils.toChecksumAddress(tx.from) : '';
+      const to = tx.to ? checksumAddress(tx.to) : '';
+      const from = tx.from ? checksumAddress(tx.from) : '';
       const value = BigInt(tx.value!);
       const gas = BigInt(tx.gas || -1); // -1 indicates unknown
       const gasPrice = BigInt(tx.gasPrice || -1);

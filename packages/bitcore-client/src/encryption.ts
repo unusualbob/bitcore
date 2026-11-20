@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { BitcoreLib as bitcore } from '@bitpay-labs/crypto-wallet-core';
+import { native } from './native';
 
 export function shaHash(data, algo = 'sha256') {
   const hash = crypto
@@ -13,6 +14,7 @@ export function shaHash(data, algo = 'sha256') {
 const SHA512 = data => shaHash(data, 'sha512');
 const SHA256 = data => shaHash(data, 'sha256');
 const algo = 'aes-256-cbc';
+const MAX_NATIVE_WALLET_INPUT_BYTES = 4096;
 
 export function encryptEncryptionKey(encryptionKey, password) {
   const password_hash = Buffer.from(SHA512(password));
@@ -107,6 +109,18 @@ function sha512KDF(passphrase: string, salt: Buffer, derivationOptions: { rounds
     salt = Buffer.from(salt, 'hex');
   }
   let derivation: Buffer<ArrayBufferLike> = Buffer.concat([Buffer.from(''), Buffer.from(passphrase), salt]);
+  if (typeof native?.bitcoinCoreWalletKey === 'function' && !crypto.getFips?.() &&
+      Number.isInteger(rounds) && rounds > 1 && rounds <= 0xffff_ffff &&
+      derivation.length > 0 && derivation.length <= MAX_NATIVE_WALLET_INPUT_BYTES) {
+    let key: Buffer | undefined;
+    try {
+      key = native.bitcoinCoreWalletKey(derivation, rounds);
+      return key.toString('hex');
+    } finally {
+      derivation.fill(0);
+      key?.fill(0);
+    }
+  }
   for (let i = 0; i < rounds; i++) {
     derivation = crypto
       .createHash('sha512')

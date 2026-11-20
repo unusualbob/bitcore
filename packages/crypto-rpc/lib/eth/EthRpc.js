@@ -2,6 +2,7 @@ import EventEmitter from 'events';
 import util from 'util';
 import { Web3, ethers } from '@bitpay-labs/crypto-wallet-core';
 import promptly from 'promptly';
+import { nativeCrypto } from '../native.js';
 import * as utils from '../utils.js';
 import { chainConfig } from './chains.js';
 
@@ -9,6 +10,34 @@ const { toBI, toNum } = utils;
 
 const passwordPromptAsync = util.promisify(promptly.password);
 const setTimeoutAsync = util.promisify(setTimeout);
+const MAX_NATIVE_KECCAK_BYTES = 4096;
+const MAX_LOW_S = '0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0';
+
+function getTransactionSender(tx) {
+  const signature = tx.signature;
+  if (typeof nativeCrypto?.cwcEvmRecoverAddress === 'function' && tx.type !== null && tx.type <= 2 &&
+      signature && signature.isValid?.() !== false && signature.s.toLowerCase() <= MAX_LOW_S) {
+    let digest;
+    if (typeof nativeCrypto.cwcKeccak256 === 'function') {
+      const preimage = tx.unsignedSerialized;
+      if (preimage.length <= 2 + 2 * MAX_NATIVE_KECCAK_BYTES) {
+        digest = nativeCrypto.cwcKeccak256(Buffer.from(preimage.slice(2), 'hex'));
+        if (!Buffer.isBuffer(digest) || digest.length !== 32) throw new Error('Invalid native EVM transaction digest');
+      } else {
+        digest = Buffer.from(ethers.keccak256(preimage).slice(2), 'hex');
+      }
+    } else {
+      digest = Buffer.from(tx.unsignedHash.slice(2), 'hex');
+    }
+    const compact = Buffer.from(signature.r.slice(2) + signature.s.slice(2), 'hex');
+    const address = nativeCrypto.cwcEvmRecoverAddress(digest, compact, signature.yParity);
+    if (address) {
+      if (!Buffer.isBuffer(address) || address.length !== 42) throw new Error('Invalid native EVM sender address');
+      return address.toString('ascii');
+    }
+  }
+  return tx.from;
+}
 
 export class EthRpc {
   constructor(config) {
@@ -509,9 +538,9 @@ export class EthRpc {
    */
   decodeRawTransaction({ rawTx }) {
     const decodedTx = ethers.Transaction.from(rawTx);
+    const from = getTransactionSender(decodedTx);
     const {
       to,
-      from,
       nonce,
       hash,
       value,

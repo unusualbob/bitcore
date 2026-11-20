@@ -3,10 +3,12 @@ import { BitcoreLib } from '@bitpay-labs/crypto-wallet-core';
 import requestStream from 'request';
 import request from 'request-promise-native';
 import * as secp256k1 from 'secp256k1';
+import { native as nativeSigner } from './native';
 import { utils } from './utils';
 
 const usingBrowser = (global as any).window;
 const URLClass = usingBrowser ? usingBrowser.URL : URL;
+
 export class Client {
   apiUrl: string;
   authKey: any;
@@ -50,7 +52,10 @@ export class Client {
     const message = this.getMessage(params);
     const privateKey = this.authKey.toBuffer();
     const messageHash = BitcoreLib.crypto.Hash.sha256sha256(Buffer.from(message));
-    return secp256k1.sign(messageHash, privateKey).signature.toString('hex');
+    // The addon returns null for digests at or above the curve order. Keep the
+    // installed signer's nonce behavior for those digests.
+    const compact = Buffer.isBuffer(privateKey) && privateKey.length === 32 ? nativeSigner?.sign(messageHash, privateKey) : undefined;
+    return (compact ?? secp256k1.sign(messageHash, privateKey).signature).toString('hex');
   }
 
   async register(params: { payload: { baseUrl?: string } & any }) {

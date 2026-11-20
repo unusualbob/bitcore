@@ -1,4 +1,4 @@
-import { Web3 } from '@bitpay-labs/crypto-wallet-core';
+import { checksumAddress } from '../../evm/checksum-address';
 import { EVMTransactionStorage } from '../../evm/models/transaction';
 import type { IEVMTransactionTransformed } from '../../evm/types';
 
@@ -23,9 +23,9 @@ export function transformMoralisTransaction(tx: any): IEVMTransactionTransformed
     fee: Number(tx.receipt_gas_used ?? tx.receiptGasUsed ?? 0) * Number(tx.gas_price ?? tx.gasPrice ?? 0),
     nonce: tx.nonce,
     to: (tx.to_address ?? tx.toAddress)
-      ? Web3.utils.toChecksumAddress(tx.to_address ?? tx.toAddress)
+      ? checksumAddress(tx.to_address ?? tx.toAddress)
       : '',
-    from: Web3.utils.toChecksumAddress(tx.from_address ?? tx.fromAddress),
+    from: checksumAddress(tx.from_address ?? tx.fromAddress),
     data: tx.input,
     internal: [],
     calls: tx?.internal_transactions?.map((t: any) => transformMoralisInternalTx(t)) || [],
@@ -40,8 +40,8 @@ export function transformMoralisTransaction(tx: any): IEVMTransactionTransformed
 
 export function transformMoralisInternalTx(tx: any) {
   return {
-    from: Web3.utils.toChecksumAddress(tx.from),
-    to: Web3.utils.toChecksumAddress(tx.to),
+    from: checksumAddress(tx.from),
+    to: checksumAddress(tx.to),
     gas: tx.gas,
     gasUsed: tx.gas_used,
     input: tx.input,

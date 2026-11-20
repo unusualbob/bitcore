@@ -211,11 +211,11 @@ Address._transformObject = function(data) {
  * @returns {Object} An object with keys: network and type
  * @private
  */
-Address._classifyFromVersion = function(buffer) {
+Address._classifyFromVersion = function(buffer, witness) {
   var version = {};
 
   if (buffer.length > 21) {
-    var info = Bech32.decode(buffer.toString('utf8'));
+    var info = witness || Bech32.decode(buffer.toString('utf8'));
     if (info.version !== 0) {
       throw new TypeError('Only witness v0 addresses are supported.');
     }
@@ -265,7 +265,8 @@ Address._transformBuffer = function(buffer, network, type) {
   }
 
   var networkObj = Networks.get(network);
-  var bufferVersion = Address._classifyFromVersion(buffer);
+  var witness = buffer.length > 21 ? Bech32.decode(buffer.toString('utf8')) : undefined;
+  var bufferVersion = Address._classifyFromVersion(buffer, witness);
 
   if (network && !networkObj) {
     throw new TypeError('Unknown network');
@@ -279,11 +280,7 @@ Address._transformBuffer = function(buffer, network, type) {
     throw new TypeError('Address has mismatched type.');
   }
 
-  if (buffer.length > 21) {
-    info.hashBuffer = Bech32.decode(buffer.toString('utf8')).data;
-  } else {
-    info.hashBuffer = buffer.slice(1);
-  }
+  info.hashBuffer = witness ? witness.data : buffer.slice(1);
   info.network = networkObj || bufferVersion.network;
   info.type = bufferVersion.type;
   return info;
@@ -391,12 +388,15 @@ Address._transformString = function(data, network, type) {
 
   data = data.trim();
 
-  try {
-    var info = Address._transformBuffer(Buffer.from(data, 'utf8'), network, type);
-    return info;
-  } catch (e) {
-    if (Address.isPayToWitnessPublicKeyHash(type) || Address.isPayToWitnessScriptHash(type)) {
-      throw e;
+  var expectsWitness = Address.isPayToWitnessPublicKeyHash(type) || Address.isPayToWitnessScriptHash(type);
+  // Long strings take the witness path in _transformBuffer. Skip it when the
+  // syntax rules rule out Bech32, unless the caller expects a witness error.
+  if (expectsWitness || data.length <= 21 ||
+      (data.lastIndexOf('1') > 0 && (data === data.toLowerCase() || data === data.toUpperCase()))) {
+    try {
+      return Address._transformBuffer(Buffer.from(data, 'utf8'), network, type);
+    } catch (e) {
+      if (expectsWitness) throw e;
     }
   }
 

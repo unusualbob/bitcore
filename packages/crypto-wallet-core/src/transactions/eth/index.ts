@@ -2,6 +2,8 @@ import { ethers } from 'ethers';
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Constants } from '../../constants';
+import { nativeCrypto } from '../../native';
+import { evmHash, isCanonicalEvmSignature, recoverEvmAddress, signEvmDigest } from '../../wallet-crypto';
 import { 
   EVM_CHAIN_NETWORK_TO_CHAIN_ID as chainIds,
   EVM_CHAIN_DEFAULT_TESTNET as defaultTestnet 
@@ -113,7 +115,7 @@ export class ETHTxProvider {
     }
 
     const signingKey = new ethers.SigningKey(k);
-    return signingKey.sign(ethers.keccak256(tx));
+    return signEvmDigest(signingKey, evmHash(tx));
   }
 
   getSignature(params: { tx: string; key: Key }) {
@@ -124,7 +126,11 @@ export class ETHTxProvider {
   getHash(params: { tx: string }) {
     const { tx } = params;
     // tx must be signed for hash to exist
-    return ethers.Transaction.from(tx).hash;
+    const parsed = ethers.Transaction.from(tx);
+    if (typeof nativeCrypto?.cwcKeccak256 === 'function' && parsed.isSigned() && parsed.type != null && parsed.type <= 2) {
+      return evmHash(parsed.serialized);
+    }
+    return parsed.hash;
   }
 
   /**
@@ -153,7 +159,16 @@ export class ETHTxProvider {
     let valid = false;
     let signedTx;
     try {
-      parsedTx.signature = ethers.Signature.from(signature);    
+      const parsedSignature = ethers.Signature.from(signature);
+      parsedTx.signature = parsedSignature;
+      if (typeof nativeCrypto?.cwcEvmRecoverAddress === 'function' && parsedTx.type != null && parsedTx.type <= 2 &&
+          (typeof signature === 'string' || Object.getPrototypeOf(signature) === ethers.Signature.prototype) &&
+          isCanonicalEvmSignature(parsedSignature) && tx === parsedTx.unsignedSerialized) {
+        // The submitted preimage and the transaction's unsigned preimage match.
+        // The same canonical signature and hash determine both addresses.
+        recoverEvmAddress(evmHash(tx), parsedSignature);
+        return parsedTx.serialized;
+      }
       signedTx = ethers.Transaction.from(parsedTx);
 
       if (signedTx.hash) {
@@ -187,6 +202,6 @@ export class ETHTxProvider {
 
   getSighash(params: { tx: string }): string {
     const { tx } = params;
-    return ethers.keccak256(tx).slice(2); // remove 0x prefix
+    return evmHash(tx).slice(2); // remove 0x prefix
   }
 }

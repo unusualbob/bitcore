@@ -15,6 +15,7 @@ import { Constants } from './constants';
 import Deriver from './derivation';
 import Message from './message';
 import Transactions from './transactions';
+import { findAssociatedTokenPda } from './transactions/spl/associated-token';
 import * as Utils from './utils';
 import Validation from './validation';
 
@@ -22,11 +23,12 @@ export type * as Types from './types';
 export type * as Web3Types from 'web3-types';
 
 
+const TokenWithNative: typeof Token = { ...Token, findAssociatedTokenPda };
 const SolanaProgram = {
   ComputeBudget,
   Memo,
   System,
-  Token,
+  Token: TokenWithNative,
   HDKey
 };
 export {

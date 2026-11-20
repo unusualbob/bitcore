@@ -968,11 +968,9 @@ export class Wallet {
   }
 
   async solSignMessage(privateKey, message) {
-    const privKeyBytes = SolKit.getBase58Encoder().encode(privateKey);
-    const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
-    const encodedMessage = SolKit.getUtf8Encoder().encode(message);
-    const signedBytes = await SolKit.signBytes(keypair.privateKey, encodedMessage);
-    return SolKit.getBase58Decoder().decode(signedBytes);
+    return Transactions.get({ chain: 'SOL' }).signMessage({
+      key: { privKey: privateKey }, messageBytes: SolKit.getUtf8Encoder().encode(message)
+    });
   }
 
   async getBlockTip() {

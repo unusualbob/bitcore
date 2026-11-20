@@ -16,6 +16,7 @@ const $ = require('../util/preconditions');
 const compare = Buffer.compare || require('buffer-compare');
 const Input = require('./input');
 const Output = require('./output');
+const { createScope } = require('./sighash-cache');
 const Sighash = require('./sighash');
 const SighashSchnorr = require('./sighashschnorr');
 const SighashWitness = require('./sighashwitness');
@@ -100,6 +101,8 @@ Transaction.shallowCopy = function(transaction) {
   const copy = new Transaction(transaction.toBuffer());
   return copy;
 };
+
+const shallowCopy = Transaction.shallowCopy;
 
 const hashProperty = {
   configurable: false,
@@ -1260,10 +1263,15 @@ Transaction.prototype.sign = function(privateKey, sigtype, signingMethod, merkle
     }
     return this;
   }
-  for (const signature of this.getSignatures(privateKey, sigtype, signingMethod, merkleRoot)) {
-    this.applySignature(signature);
-  }
-  return this;
+  const applySignatures = () => {
+    for (const signature of this.getSignatures(privateKey, sigtype, signingMethod, merkleRoot)) {
+      this.applySignature(signature);
+    }
+    return this;
+  };
+  return this.getSignatures === getSignatures && this.applySignature === applySignature
+    ? withSighashCache(this, applySignatures)
+    : applySignatures();
 };
 
 /**
@@ -1281,14 +1289,22 @@ Transaction.prototype.getSignatures = function(privKey, sigtype, signingMethod, 
   privKey = new PrivateKey(privKey);
   const results = [];
   const hashData = Hash.sha256ripemd160(privKey.publicKey.toBuffer());
-  for (let i = 0; i < this.inputs.length; i++) {
-    const input = this.inputs[i];
-    for (const signature of input.getSignatures(this, privKey, i, sigtype, hashData, signingMethod, merkleRoot)) {
-      results.push(signature);
+  return withSighashCache(this, () => {
+    for (let i = 0; i < this.inputs.length; i++) {
+      const input = this.inputs[i];
+      for (const signature of input.getSignatures(this, privKey, i, sigtype, hashData, signingMethod, merkleRoot)) {
+        results.push(signature);
+      }
     }
-  }
-  return results;
+    return results;
+  });
 };
+
+const getSignatures = Transaction.prototype.getSignatures;
+const toBuffer = Transaction.prototype.toBuffer;
+const toBufferWriter = Transaction.prototype.toBufferWriter;
+const withSighashCache = createScope(Input, Output, Hash, tx =>
+  Transaction.shallowCopy === shallowCopy && tx.toBuffer === toBuffer && tx.toBufferWriter === toBufferWriter);
 
 /**
  * Add a signature to the transaction
@@ -1304,6 +1320,8 @@ Transaction.prototype.applySignature = function(signature) {
   this.inputs[signature.inputIndex].addSignature(this, signature);
   return this;
 };
+
+const applySignature = Transaction.prototype.applySignature;
 
 Transaction.prototype.isFullySigned = function() {
   for (const input of this.inputs || []) {

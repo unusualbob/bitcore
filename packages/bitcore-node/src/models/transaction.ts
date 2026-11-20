@@ -15,6 +15,7 @@ import { MongoBound } from './base';
 import { BaseTransaction, ITransaction } from './baseTransaction';
 import { CoinStorage, ICoin } from './coin';
 import { EventStorage } from './events';
+import { UtxoTransactionMetadata, prepareUtxoTransactions } from './utxoSerialization';
 import { IWalletAddress, WalletAddressStorage } from './walletAddress';
 
 export { ITransaction };
@@ -213,8 +214,11 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
     chain: string;
     network: string;
     initialSyncComplete: boolean;
-  }) {
+  }, metadata?: UtxoTransactionMetadata) {
     const { initialSyncComplete, height, chain, network } = params;
+    if (!metadata && !(params.parentChain && params.forkHeight && height < params.forkHeight)) {
+      metadata = prepareUtxoTransactions(params.txs, chain);
+    }
     const mintStream = new Readable({
       objectMode: true,
       read: () => {}
@@ -230,7 +234,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
       read: () => {}
     });
 
-    this.streamMintOps({ ...params, mintStream });
+    this.streamMintOps({ ...params, mintStream }, metadata);
     await new Promise(r =>
       mintStream
         .pipe(new MempoolSafeTransform(height))
@@ -239,7 +243,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
         .on('finish', r)
     );
 
-    this.streamSpendOps({ ...params, spentStream });
+    this.streamSpendOps({ ...params, spentStream }, metadata);
     await new Promise(r =>
       spentStream
         .pipe(new PruneMempoolStream(chain, network, initialSyncComplete))
@@ -247,7 +251,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
         .on('finish', r)
     );
 
-    this.streamTxOps({ ...params, txs: params.txs as TaggedBitcoinTx[], txStream });
+    this.streamTxOps({ ...params, txs: params.txs as TaggedBitcoinTx[], txStream }, metadata);
     await new Promise(r =>
       txStream
         .pipe(new MempoolSafeTransform(height))
@@ -270,7 +274,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
     network: string;
     mempoolTime?: Date;
     txStream: Readable;
-  }) {
+  }, metadata?: UtxoTransactionMetadata) {
     const {
       blockHash,
       blockTime,
@@ -321,7 +325,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
       if (height > 0) {
         spentQuery = { spentHeight: height, chain, network };
       } else {
-        spentQuery = { spentTxid: { $in: params.txs.map(tx => tx._hash) }, chain, network };
+        spentQuery = { spentTxid: { $in: params.txs.map(tx => metadata?.get(tx)?.txid ?? tx._hash) }, chain, network };
       }
       const spent = await CoinStorage.collection
         .find(spentQuery)
@@ -345,7 +349,8 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
 
       let txBatch = new Array<TxOp>();
       for (const tx of params.txs) {
-        const txid = tx._hash!;
+        const prepared = metadata?.get(tx);
+        const txid = prepared?.txid ?? tx._hash!;
         const spent = groupedSpends[txid] || {};
         const mintedWallets = tx.wallets || [];
         const spentWallets = spent.wallets || [];
@@ -373,7 +378,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
                 blockTimeNormalized,
                 coinbase: tx.isCoinbase(),
                 fee,
-                size: tx.toBuffer().length,
+                size: prepared?.size ?? tx.toBuffer().length,
                 locktime: tx.nLockTime,
                 inputCount: tx.inputs.length,
                 outputCount: tx.outputs.length,
@@ -395,8 +400,8 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
       if (txBatch.length) {
         params.txStream.push(txBatch);
       }
-      params.txStream.push(null);
     }
+    params.txStream.push(null);
   }
 
   async tagMintBatch(params: {
@@ -405,7 +410,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
     initialSyncComplete: boolean;
     mintBatch: Array<MintOp>;
     txs: Array<BitcoinTransaction>;
-  }) {
+  }, metadata?: UtxoTransactionMetadata) {
     const { chain, network, initialSyncComplete, mintBatch } = params;
     const walletConfig = Config.for('api').wallets;
     if (!initialSyncComplete && !(walletConfig && walletConfig.allowCreationBeforeCompleteSync)) {
@@ -456,7 +461,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
       walletsByTxid.set(mintOp.updateOne.filter.mintTxid, txWallets);
     }
     for (const tx of params.txs as Array<TaggedBitcoinTx>) {
-      tx.wallets = walletsByTxid.get(tx._hash!) || [];
+      tx.wallets = walletsByTxid.get(metadata?.get(tx)?.txid ?? tx._hash!) || [];
     }
   }
 
@@ -469,7 +474,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
     chain: string;
     network: string;
     mintStream: Readable;
-  }) {
+  }, metadata?: UtxoTransactionMetadata) {
     const { chain, height, network, parentChain, forkHeight } = params;
     const parentChainCoinsMap = new Map();
     if (parentChain && forkHeight && height < forkHeight) {
@@ -490,7 +495,8 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
     // a tx's outputs always land in one mint batch; tag each batch's txs from that batch alone
     let batchTxs = new Array<BitcoinTransaction>();
     for (const tx of params.txs) {
-      tx._hash = tx.hash;
+      const txid = metadata?.get(tx)?.txid ?? tx.hash;
+      tx._hash = txid;
       batchTxs.push(tx);
       const isCoinbase = tx.isCoinbase();
       for (const [index, output] of tx.outputs.entries()) {
@@ -498,7 +504,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
           parentChain &&
           forkHeight &&
           height < forkHeight &&
-          (!parentChainCoinsMap.size || !parentChainCoinsMap.get(`${tx._hash}:${index}`))
+          (!parentChainCoinsMap.size || !parentChainCoinsMap.get(`${txid}:${index}`))
         ) {
           continue;
         }
@@ -515,7 +521,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
         mintBatch.push({
           updateOne: {
             filter: {
-              mintTxid: tx._hash,
+              mintTxid: txid,
               mintIndex: index,
               chain,
               network
@@ -541,14 +547,14 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
         });
       }
       if (mintBatch.length >= MAX_BATCH_SIZE) {
-        await this.tagMintBatch({ ...params, mintBatch, txs: batchTxs });
+        await this.tagMintBatch({ ...params, mintBatch, txs: batchTxs }, metadata);
         params.mintStream.push(mintBatch);
         mintBatch = new Array<MintOp>();
         batchTxs = new Array<BitcoinTransaction>();
       }
     }
     if (mintBatch.length) {
-      await this.tagMintBatch({ ...params, mintBatch, txs: batchTxs });
+      await this.tagMintBatch({ ...params, mintBatch, txs: batchTxs }, metadata);
       params.mintStream.push(mintBatch);
     }
     params.mintStream.push(null);
@@ -563,7 +569,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
     chain: string;
     network: string;
     spentStream: Readable;
-  }) {
+  }, metadata?: UtxoTransactionMetadata) {
     const { chain, network, height, parentChain, forkHeight } = params;
     if (parentChain && forkHeight && height < forkHeight) {
       params.spentStream.push(null);
@@ -574,6 +580,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
       if (tx.isCoinbase()) {
         continue;
       }
+      const txid = metadata?.get(tx)?.txid;
       for (const input of tx.inputs) {
         const inputObj = input.toObject();
         const updateQuery = {
@@ -586,7 +593,7 @@ export class TransactionModel extends BaseTransaction<IBtcTransaction> {
               network
             },
             update: {
-              $set: { spentTxid: tx._hash || tx.hash, spentHeight: height, sequenceNumber: inputObj.sequenceNumber }
+              $set: { spentTxid: txid ?? (tx._hash || tx.hash), spentHeight: height, sequenceNumber: inputObj.sequenceNumber }
             }
           }
         };

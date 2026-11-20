@@ -10,7 +10,12 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bitcore-bch-schnorr = { path = "../bch-schnorr" }
+bitcore-cwc-crypto = { path = "../cwc-crypto" }
 bitcore-ecdsa = { path = "../ecdsa" }
+bitcore-ecies = { path = "../ecies" }
+bitcore-ed25519 = { path = "../ed25519" }
 bitcore-hdkeys = { path = "../hdkeys" }
 bitcore-kdfs = { path = "../kdfs" }
+bitcore-merkle = { path = "../merkle" }
 bitcore-taproot = { path = "../taproot" }
+bitcore-xrp-keys = { path = "../xrp-keys" }

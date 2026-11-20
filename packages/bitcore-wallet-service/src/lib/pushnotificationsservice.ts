@@ -6,7 +6,6 @@ import 'source-map-support/register';
 import Mustache from 'mustache';
 import request from 'request';
 import defaultRequest from 'request';
-import sjcl from 'sjcl';
 import config from '../config';
 import { Common } from './common';
 import logger from './logger';
@@ -217,8 +216,8 @@ export class PushNotificationsService {
 
                 let notificationData: any;
 
-                const walletId = sjcl.codec.hex.fromBits(sjcl.hash.sha256.hash(notification.walletId || sub.walletId));
-                const copayerId = sjcl.codec.hex.fromBits(sjcl.hash.sha256.hash(sub.copayerId));
+                const walletId = Utils.hashIdentifier(notification.walletId || sub.walletId);
+                const copayerId = Utils.hashIdentifier(sub.copayerId);
                 const notification_type = notification.type;
                 // chain and network are needed for NewBlock notifications
                 const chain = notification?.data?.chain || notification?.data?.coin;

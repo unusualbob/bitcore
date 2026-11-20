@@ -4,11 +4,11 @@ import { EventEmitter } from 'events';
 import querystring from 'querystring';
 import Mnemonic from '@bitpay-labs/bitcore-mnemonic';
 import * as CWC from '@bitpay-labs/crypto-wallet-core';
-import Bip38 from 'bip38';
 import { singleton } from 'preconditions';
 import * as Uuid from 'uuid';
 import { BulkClient } from './bulkclient';
 import { Constants, Encryption, Utils } from './common';
+import { WalletBip38 } from './common/bip38';
 import { Credentials } from './credentials';
 import { Errors } from './errors';
 import { Key, PasswordMaybe } from './key';
@@ -472,7 +472,7 @@ export class API extends EventEmitter {
       log.warn('DEPRECATED: decryptBIP38PrivateKey will remove callback support in the future.');
     }
     try {
-      const bip38 = new Bip38();
+      const bip38 = new WalletBip38();
 
       let privateKeyWif;
       try {

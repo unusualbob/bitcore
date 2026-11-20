@@ -1,13 +1,18 @@
 'use strict';
 
+const nodeCrypto = require('crypto');
 const BN = require('../crypto/bn');
 const Hash = require('../crypto/hash');
+const { native } = require('../crypto/ecdsa-native');
 const BufferReader = require('../encoding/bufferreader');
 const BufferWriter = require('../encoding/bufferwriter');
 const Transaction = require('../transaction');
 const BufferUtil = require('../util/buffer');
 const $ = require('../util/preconditions');
 const BlockHeader = require('./blockheader');
+
+const doubleSha256 = Hash.sha256sha256;
+const sha256 = Hash.sha256;
 
 /**
  * Instantiate a Block from a Buffer, JSON object, or Object with
@@ -198,6 +203,20 @@ Block.prototype.getTransactionHashes = function getTransactionHashes() {
 Block.prototype.getMerkleTree = function getMerkleTree() {
 
   const tree = this.getTransactionHashes();
+  const count = this.transactions.length;
+  if (typeof native?.merkleParents === 'function' && count >= 8 && count <= 65536 &&
+      Array.isArray(tree) && tree.length === count && tree.push === Array.prototype.push &&
+      tree.every === Array.prototype.every &&
+      Hash.sha256sha256 === doubleSha256 && Hash.sha256 === sha256 && !nodeCrypto.getFips?.() &&
+      tree.every(hash => Buffer.isBuffer(hash) && hash.length === 32)) {
+    const parents = native.merkleParents(Buffer.concat(tree), count);
+    for (let offset = 0; offset < parents.length; offset += 32) {
+      const parent = Buffer.allocUnsafeSlow(32);
+      parents.copy(parent, 0, offset, offset + 32);
+      tree.push(parent);
+    }
+    return tree;
+  }
 
   let j = 0;
   for (let size = this.transactions.length; size > 1; size = Math.floor((size + 1) / 2)) {

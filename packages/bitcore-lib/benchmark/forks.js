@@ -67,6 +67,11 @@ benchmark(__filename, libraries => {
     // Vary the account and branch indexes so Dogecoin's cache does not return a finished path.
     add('privatePath', f => f.root.deriveChild("m/44'/" + coinType + "'/" + f.privateIndex++ + "'/0/0"));
     add('watchPath', f => f.watch.deriveChild('m/' + f.publicIndex++ + '/0'));
+    if (coin === 'cash') {
+      const participants = fixtures.map(row => row.cash.publicKey);
+      add('escrowRedeemScript16', f => libraries.cash.Script.buildEscrowOut(participants, f.publicKey));
+      expected.escrowRedeemScript16 = 'publicKeyParse';
+    }
     if (Schnorr) {
       add('schnorrSign', f => Schnorr.sign(f.digest, f.secret));
       add('schnorrVerify', f => Schnorr.verify(f.digest, f.schnorrSignature, f.publicKey));

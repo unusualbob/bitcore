@@ -4,9 +4,82 @@ var BN = require('./bn');
 var BufferUtil = require('../util/buffer');
 
 var EC = require('elliptic').ec;
-var ec = new EC('secp256k1');
-var ecPoint = ec.curve.point.bind(ec.curve);
-var ecPointFromX = ec.curve.pointFromX.bind(ec.curve);
+const { native } = require('./ecdsa-native');
+
+const { curve } = new EC('secp256k1');
+const ecPoint = curve.point.bind(curve);
+const ecPointFromX = curve.pointFromX.bind(curve);
+const CoordinateBN = curve.p.constructor;
+const fieldHex = 'fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f';
+const fieldSize = new CoordinateBN(fieldHex, 16);
+const order = new CoordinateBN('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141', 16);
+const red = curve.red;
+const seven = new CoordinateBN(7);
+
+// The public Point and BN objects expose the underlying elliptic objects.
+// Keep the original path when a caller has customized the methods it uses.
+function methodValue(object, name) {
+  for (let owner = object; owner; owner = Object.getPrototypeOf(owner)) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (descriptor) return descriptor.value;
+  }
+}
+
+function standardMethods(object, names) {
+  const methods = names.map(name => [name, methodValue(object, name)]);
+  return () => methods.every(([name, method]) => typeof method === 'function' && methodValue(object, name) === method);
+}
+
+const coordinateMethods = [
+  'cmp', 'cmpn', 'clone', 'mul', 'toArray', 'toArrayLike', 'fromRed', 'toRed', 'isOdd',
+  'redSqrt', 'redSqr', 'redMul', 'redIAdd', 'redSub', 'redISub', 'redNeg'
+];
+const standardCoordinates = standardMethods(CoordinateBN.prototype, coordinateMethods);
+const standardBN = standardMethods(BN.prototype, coordinateMethods);
+const standardCurve = standardMethods(curve, [
+  'point', 'validate', '_endoWnafMulAdd', '_endoSplit', '_wnafMulAdd', 'jpoint'
+]);
+const standardReduction = standardMethods(red, [
+  'convertTo', 'convertFrom', 'sqrt', 'pow', 'sqr', 'mul', 'iadd', 'sub', 'isub', 'neg', 'imod'
+]);
+
+function hasStandardCurve() {
+  return standardCoordinates() && standardBN() && standardCurve() && standardReduction() &&
+    curve.red === red && red.m.cmp(fieldSize) === 0 && curve.p.cmp(fieldSize) === 0 &&
+    curve.a.red === red && curve.b.red === red && curve.a.cmpn(0) === 0 &&
+    curve.b.cmp(seven) === 0 && curve.zero.cmpn(0) === 0;
+}
+
+function isCoordinate(value, context) {
+  if (!value || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  // An ordinary bn.js instance owns only negative, words, length and red.
+  if ((prototype !== CoordinateBN.prototype && prototype !== BN.prototype) ||
+      Object.getOwnPropertyNames(value).length !== 4 || value.red !== context || value.negative !== 0 ||
+      !Number.isInteger(value.length) || value.length < 1 || value.length > fieldSize.length ||
+      !Array.isArray(value.words) || (value.length > 1 && value.words[value.length - 1] === 0)) {
+    return false;
+  }
+  for (let i = 0; i < value.length; i++) {
+    if ((value.words[i] & 0x3ffffff) !== value.words[i]) return false;
+  }
+  return value.cmp(fieldSize) < 0;
+}
+
+function pointFromX(odd, x) {
+  if (typeof native?.publicKeyParse === 'function' && typeof odd === 'boolean' && hasStandardCurve()) {
+    // Preserve bn.js's accepted input forms and coordinate class. A red input
+    // can also alias the returned point's x, so it stays on the original path.
+    if (typeof x === 'string' && /^[0-9a-f]{1,64}$/i.test(x)) x = new CoordinateBN(x, 16);
+    if (isCoordinate(x, null)) {
+      const sec = x.toArrayLike(Buffer, 'be', 33);
+      sec[0] = odd ? 3 : 2;
+      const xy = native.publicKeyParse(sec);
+      if (xy) return ecPoint(x, new CoordinateBN(xy.subarray(33)));
+    }
+  }
+  return ecPointFromX(x, odd);
+}
 
 /**
  *
@@ -30,7 +103,7 @@ var Point = function Point(x, y, isRed) {
   return point;
 };
 
-Point.prototype = Object.getPrototypeOf(ec.curve.point());
+Point.prototype = Object.getPrototypeOf(curve.point());
 
 /**
  *
@@ -43,7 +116,7 @@ Point.prototype = Object.getPrototypeOf(ec.curve.point());
  */
 Point.fromX = function fromX(odd, x){
   try {
-    var point = ecPointFromX(x, odd);
+    var point = pointFromX(odd, x);
   } catch (e) {
     throw new Error('Invalid X');
   }
@@ -59,7 +132,7 @@ Point.fromX = function fromX(odd, x){
  * @returns {Point} An instance of the base point.
  */
 Point.getG = function getG() {
-  return ec.curve.g;
+  return curve.g;
 };
 
 /**
@@ -70,8 +143,9 @@ Point.getG = function getG() {
  * @returns {BN} A BN instance of the number of points on the curve
  */
 Point.getN = function getN() {
-  return new BN(ec.curve.n.toArray());
+  return new BN(curve.n.toArray());
 };
+const getN = Point.getN;
 
 if (!Point.prototype._getX)
   Point.prototype._getX = Point.prototype.getX;
@@ -99,6 +173,26 @@ Point.prototype.getY = function getY() {
   return new BN(this._getY().toArray());
 };
 
+const standardPoint = standardMethods(Point.prototype, [
+  'getX', 'getY', '_getX', '_getY', 'isInfinity', 'mul', '_hasDoubles', '_getBeta',
+  '_getNAFPoints', 'dbl', 'neg', 'add', 'eq', 'toJ'
+]);
+
+function isOnStandardCurve(point) {
+  try {
+    // secp256k1 has cofactor one, so a finite point on it already belongs to
+    // the order-N group. Let the original validation handle error reporting.
+    // An ordinary elliptic point owns curve, type, precomputed, x, y and inf.
+    return Object.getPrototypeOf(point) === Point.prototype && point.curve === curve &&
+      point.precomputed === null && Object.getOwnPropertyNames(point).length === 6 &&
+      methodValue(Point, 'getN') === getN && standardPoint() && hasStandardCurve() && curve.n.cmp(order) === 0 &&
+      methodValue(curve.n, 'toArray') === CoordinateBN.prototype.toArray &&
+      isCoordinate(point.x, red) && isCoordinate(point.y, red) && curve.validate(point);
+  } catch {
+    return false;
+  }
+}
+
 /**
  *
  * Will determine if the point is valid
@@ -113,6 +207,8 @@ Point.prototype.validate = function validate() {
   if (this.isInfinity()){
     throw new Error('Point cannot be equal to Infinity');
   }
+
+  if (isOnStandardCurve(this)) return this;
 
   var p2;
   try {
@@ -149,18 +245,50 @@ Point.pointToCompressed = function pointToCompressed(point) {
   return BufferUtil.concat([prefix, xbuf]);
 };
 
-// todo: needs test case
 Point.prototype.hasSquare = function() {
   return !this.isInfinity() && this.isSquare(this.getY());
+};
+
+const standardSquare = standardMethods(BN.prototype, ['toRed', 'redPow', 'fromRed', 'sub', 'div', 'eq', 'toString']);
+const standardBNRed = BN.red;
+const jacobiField = typeof BigInt === 'function' ? BigInt('0x' + fieldHex) : undefined;
+
+// Binary Jacobi symbol. For this prime modulus, only +1 denotes a nonzero square.
+function hasJacobiSymbolOne(value) {
+  const zero = BigInt(0);
+  const one = BigInt(1);
+  const three = BigInt(3);
+  const five = BigInt(5);
+  const seven = BigInt(7);
+  let x = BigInt('0x' + value.toString(16));
+  let modulus = jacobiField;
+  let positive = true;
+  while (x > zero) {
+    while ((x & one) === zero) {
+      x >>= one;
+      const residue = modulus & seven;
+      if (residue === three || residue === five) positive = !positive;
+    }
+    if (x === one) return positive;
+    if ((x & three) === three && (modulus & three) === three) positive = !positive;
+    const remainder = modulus % x;
+    modulus = x;
+    x = remainder;
+  }
+  return false;
 }
 
-// todo: needs test cases
 Point.prototype.isSquare = function(x) {
-  let p = new BN('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F', 'hex');
-  let x0 = new BN(x);
-  let base = x0.toRed(BN.red(p));
-  let res = base.redPow(p.sub(BN.One).div(new BN(2))).fromRed(); //refactor to BN arithmetic operations
+  const p = new BN(fieldHex, 16);
+  const x0 = new BN(x);
+  if (jacobiField !== undefined && methodValue(BN, 'red') === standardBNRed && standardSquare() && standardCoordinates() &&
+      isCoordinate(BN.One, null) && BN.One.length === 1 && BN.One.words[0] === 1 &&
+      isCoordinate(x0, null) && Object.getPrototypeOf(x0) === BN.prototype) {
+    return hasJacobiSymbolOne(x0);
+  }
+  const base = x0.toRed(BN.red(p));
+  const res = base.redPow(p.sub(BN.One).div(new BN(2))).fromRed();
   return res.eq(new BN(1));
-}
+};
 
 module.exports = Point;

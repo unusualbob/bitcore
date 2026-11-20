@@ -9,10 +9,48 @@ const PrivateKey = bitcore.PrivateKey;
 const Hash = bitcore.crypto.Hash;
 const $ = bitcore.util.preconditions;
 
+let native;
+if (typeof module !== 'undefined' && typeof module.require === 'function' &&
+    typeof process !== 'undefined' && process.versions?.node) {
+  const path = '@bitpay-labs/bitcore-lib/lib/crypto/ecdsa-native';
+  try {
+    ({ native } = module.require(path));
+  } catch (err) {
+    if (err.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED' &&
+        (err.code !== 'MODULE_NOT_FOUND' || !err.message.startsWith(`Cannot find module '${path}'`))) throw err;
+  }
+}
+
+function nativeKeyMaterial(privateKey, publicKey) {
+  if (typeof native?.eciesKeyMaterial !== 'function' ||
+      !(privateKey instanceof PrivateKey) || !(publicKey instanceof PublicKey)) return;
+  const scalar = privateKey.bn;
+  if (!(scalar instanceof bitcore.crypto.BN) || scalar.isNeg() || scalar.bitLength() > 256 ||
+      !scalar.toBuffer?.[Symbol.for('@bitpay-labs/bitcore.bn.toBuffer')]) return;
+  const peer = publicKey.point;
+  const local = privateKey.publicKey.point;
+  if (peer.isInfinity() || local.isInfinity()) return;
+  const secret = scalar.toBuffer({ size: 32 });
+  try {
+    // Preserve both y coordinates and the caller's cached local public key.
+    return native.eciesKeyMaterial(secret, Buffer.from(peer.encode('array', false)), Buffer.from(local.encode('array', false)));
+  } finally {
+    secret.fill(0);
+  }
+}
 
 // http://en.wikipedia.org/wiki/Integrated_Encryption_Scheme
 
 function KDF(privateKey, publicKey, isDecrypt) {
+  const material = nativeKeyMaterial(privateKey, publicKey);
+  if (material) {
+    try {
+      if (!Buffer.isBuffer(material) || material.length !== 98) throw new Error('Invalid native ECIES key material');
+      return deriveKeys(material.subarray(0, 32), material.subarray(32, 65), material.subarray(65), isDecrypt);
+    } finally {
+      material.fill(0);
+    }
+  }
   const r = privateKey.bn;
   const KB = publicKey.point;
   const P = KB.mul(r);
@@ -21,6 +59,14 @@ function KDF(privateKey, publicKey, isDecrypt) {
   // Ensure that the public keys are in compressed format so the salt is consistent
   const pubA = PublicKey.fromPoint(publicKey.point, true).toBuffer();
   const pubB = PublicKey.fromPoint(privateKey.publicKey.point, true).toBuffer();
+  try {
+    return deriveKeys(Sbuf, pubA, pubB, isDecrypt);
+  } finally {
+    Sbuf.fill(0);
+  }
+}
+
+function deriveKeys(Sbuf, pubA, pubB, isDecrypt) {
   const salt = isDecrypt
     ? Buffer.concat([pubB, pubA])
     : Buffer.concat([pubA, pubB]);

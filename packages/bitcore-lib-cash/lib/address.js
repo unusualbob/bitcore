@@ -353,7 +353,7 @@ function decodeCashAddress(address) {
     encodedPayload = pieces[0];
   }
 
-  var payload = base32.decode(encodedPayload.toLowerCase());
+  var payload = base32.decode(encodedPayload);
 
   if (prefix) {
     $.checkArgument(validChecksum(prefix, payload), 'Invalid checksum:'+ address);
@@ -793,41 +793,26 @@ function checksumToArray(checksum) {
  */
 var GENERATOR1 = [0x98, 0x79, 0xf3, 0xae, 0x1e];
 var GENERATOR2 = [0xf2bc8e61, 0xb76d99e2, 0x3e5fb3c4, 0x2eabe2a8, 0x4f43e470];
-
-function polymod(data) {
-  // Treat c as 8 bits + 32 bits
-  var c0 = 0, c1 = 1, C = 0;
-  for (var j = 0; j < data.length; j++) {
-    // Set C to c shifted by 35
-    C = c0 >>> 3;
-    // 0x[07]ffffffff
-    c0 &= 0x07;
-    // Shift as a whole number
-    c0 <<= 5;
-    c0 |= c1 >>> 27;
-    // 0xffffffff >>> 5
-    c1 &= 0x07ffffff;
-    c1 <<= 5;
-    // xor the last 5 bits
-    c1 ^= data[j];
-    for (var i = 0; i < GENERATOR1.length; ++i) {
-      if (C & (1 << i)) {
-        c0 ^= GENERATOR1[i];
-        c1 ^= GENERATOR2[i];
-      }
+var POLYMOD_HIGH = new Uint8Array(32);
+var POLYMOD_LOW = new Uint32Array(32);
+for (var top = 1; top < 32; top++) {
+  for (var bit = 0; bit < 5; bit++) {
+    if (top & (1 << bit)) {
+      POLYMOD_HIGH[top] ^= GENERATOR1[bit];
+      POLYMOD_LOW[top] ^= GENERATOR2[bit];
     }
   }
-  c1 ^= 1;
-  // Negative numbers -> large positive numbers
-  if (c1 < 0) {
-    c1 ^= 1 << 31;
-    c1 += (1 << 30) * 2;
+}
+
+function polymod(data) {
+  // Track the 40-bit state in two integers so bitwise operations stay exact.
+  var c0 = 0, c1 = 1;
+  for (var j = 0; j < data.length; j++) {
+    var top = c0 >>> 3;
+    c0 = (((c0 & 7) << 5) | (c1 >>> 27)) ^ POLYMOD_HIGH[top];
+    c1 = (c1 << 5) ^ data[j] ^ POLYMOD_LOW[top];
   }
-  // Unless bitwise operations are used,
-  // numbers are consisting of 52 bits, except
-  // the sign bit. The result is max 40 bits,
-  // so it fits perfectly in one number!
-  return c0 * (1 << 30) * 4 + c1;
+  return c0 * 0x100000000 + ((c1 ^ 1) >>> 0);
 }
 
 module.exports = Address;

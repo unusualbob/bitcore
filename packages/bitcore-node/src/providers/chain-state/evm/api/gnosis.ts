@@ -1,4 +1,4 @@
-import { Utils, Web3 } from '@bitpay-labs/crypto-wallet-core';
+import { Utils } from '@bitpay-labs/crypto-wallet-core';
 import { ChainStateProvider } from '../../';
 import logger from '../../../../logger';
 import { Config } from '../../../../services/config';
@@ -11,6 +11,7 @@ import { MultisigRelatedFilterTransform } from '../api/multisigTransform';
 import { PopulateEffectsTransform } from '../api/populateEffectsTransform';
 import { PopulateReceiptTransform } from '../api/populateReceiptTransform';
 import { EVMListTransactionsStream } from '../api/transform';
+import { checksumAddress } from '../checksum-address';
 import { EVMBlockStorage } from '../models/block';
 import { EVMTransactionStorage } from '../models/transaction';
 // import { EventLog } from '../types';
@@ -157,8 +158,8 @@ export class GnosisApi {
 
   async streamGnosisWalletTransactions(params: { multisigContractAddress: string } & StreamWalletTransactionsParams) {
     const { chain, network, multisigContractAddress, args } = params;
-    const normalizedMultisigContractAddress = Web3.utils.toChecksumAddress(multisigContractAddress);
-    const tokenAddress = args.tokenAddress ? Web3.utils.toChecksumAddress(args.tokenAddress) : undefined;
+    const normalizedMultisigContractAddress = checksumAddress(multisigContractAddress);
+    const tokenAddress = args.tokenAddress ? checksumAddress(args.tokenAddress) : undefined;
     const transactionQuery = getCSP(chain, network).getWalletTransactionQuery(params);
     delete transactionQuery.wallets;
     delete transactionQuery['wallets.0'];

@@ -10,6 +10,7 @@ import { BaseBlock } from './baseBlock';
 import { CoinStorage } from './coin';
 import { EventStorage } from './events';
 import { TransactionStorage } from './transaction';
+import { UtxoTransactionMetadata, getUtxoBlockSize, prepareUtxoTransactions } from './utxoSerialization';
 
 export type IBtcBlock = IBlock & {
   version: number;
@@ -62,7 +63,8 @@ export class BitcoinBlock extends BaseBlock<IBtcBlock> {
     initialHeight?: number;
   }) {
     const { chain, network, block, parentChain, forkHeight, initialSyncComplete } = params;
-    const blockOp = await this.getBlockOp(params);
+    const metadata = prepareUtxoTransactions(block.transactions, chain);
+    const blockOp = await this.getBlockOp(params, metadata);
     const convertedBlock = blockOp.updateOne.update.$set;
     const { height, timeNormalized, time } = convertedBlock;
 
@@ -88,7 +90,7 @@ export class BitcoinBlock extends BaseBlock<IBtcBlock> {
       parentChain,
       forkHeight,
       initialSyncComplete
-    });
+    }, metadata);
 
     if (initialSyncComplete) {
       EventStorage.signalBlock(convertedBlock);
@@ -99,7 +101,10 @@ export class BitcoinBlock extends BaseBlock<IBtcBlock> {
     await this.collection.updateOne({ hash: convertedBlock.hash, chain, network }, { $set: { processed: true, feeData } });
   }
 
-  async getBlockOp(params: { block: BitcoinBlockType; chain: string; network: string; initialHeight?: number }) {
+  async getBlockOp(
+    params: { block: BitcoinBlockType; chain: string; network: string; initialHeight?: number },
+    metadata?: UtxoTransactionMetadata
+  ) {
     const { block, chain, network } = params;
     const header = block.header.toObject();
     const blockTime = header.time * 1000;
@@ -132,7 +137,7 @@ export class BitcoinBlock extends BaseBlock<IBtcBlock> {
       bits: header.bits,
       nonce: header.nonce,
       transactionCount: block.transactions.length,
-      size: block.toBuffer().length,
+      size: getUtxoBlockSize(block, chain, metadata),
       reward: block.transactions[0].outputAmount,
       processed: false
     };

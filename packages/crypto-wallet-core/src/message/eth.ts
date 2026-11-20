@@ -1,6 +1,7 @@
 import BitcoreLib from '@bitpay-labs/bitcore-lib';
 import { ethers } from 'ethers';
 import { encodeBuffer } from '../utils';
+import { evmHash, signEvmDigest } from '../wallet-crypto';
 import type { Encoding, HDKeyType, IMessageClass, ISignedMessage, KeyType } from '../types/message';
 
 export class EthMessage implements IMessageClass {
@@ -10,7 +11,7 @@ export class EthMessage implements IMessageClass {
   }): Buffer | string {
     const { message, encoding } = args;
     const prefix = '\x19Ethereum Signed Message:\n' + message.length;
-    const messageHash = ethers.keccak256(ethers.toUtf8Bytes(prefix + message));
+    const messageHash = evmHash(ethers.toUtf8Bytes(prefix + message));
     const buf = Buffer.from(messageHash.slice(2), 'hex');
     return encodeBuffer(buf, encoding);
   }
@@ -26,7 +27,7 @@ export class EthMessage implements IMessageClass {
     privateKey = new BitcoreLib.PrivateKey(privateKey);
     const messageHash = this.getMessageHash({ message });
     const signingKey = new ethers.SigningKey('0x' + privateKey.toString('hex'));
-    const sig = signingKey.sign(messageHash);
+    const sig = signEvmDigest(signingKey, ethers.hexlify(messageHash));
     const buf = Buffer.from(sig.serialized.slice(2), 'hex');
     return {
       signature: encodeBuffer(buf, encoding),

@@ -1,6 +1,6 @@
 # Bitcore cryptography for Node
 
-Bitcoin, Bitcoin Cash, Litecoin and Dogecoin can use a local Node-API addon for deterministic ECDSA signing, verification, public-key recovery, public-key creation and HD derivation. Bitcoin also supports native BIP340 Schnorr and BIP341 key tweaks. Bitcoin Cash uses its separate 2019 Schnorr algorithm. Existing callers use the same Bitcore classes and methods.
+Bitcore's optional Node-API addon accelerates the wallet libraries across UTXO, EVM, XRP and Solana chains. Existing callers use the same Bitcore classes and methods. The [chain coverage and measurements](COVERAGE.md) describe the wallet, transaction, RPC and service paths. The sections below also record results from earlier migration phases.
 
 ## Build and test
 
@@ -16,13 +16,13 @@ node native/test-parity.cjs
 node packages/bitcore-lib/benchmark/ecdsa.js
 ```
 
-The root npm scripts `build:ecdsa`, `test:ecdsa`, and `bench:ecdsa` provide shortcuts for building the addon, running the Rust/binding/parity checks, and benchmarking it.
+For the full cross-chain checks, run `npm run test:crypto`. It tests the Rust workspace, builds the release addon, compiles the wallet TypeScript and runs the native parity suites. The root npm scripts `build:ecdsa`, `test:ecdsa`, and `bench:ecdsa` remain available for the original ECDSA workflow.
 
 Use `npm run test:hdkeys` to build and test public-key creation and HD derivation, and `npm run bench:hdkeys` to benchmark those public APIs. Both groups of operations share the addon and its backend selector.
 
 The explicit build places the same release binary in each coin package's `lib/native` directory. Node loads it by default when present. For Bitcoin, set `BITCORE_ECDSA_BACKEND=js` to use the fallback or `native` to require a loadable addon. The coin forks have their own selectors documented below. Select the backend before importing Bitcore. The npm tarballs exclude the local binary, and browser builds use JavaScript. Linux x64 was tested. macOS has linker support but has not been tested. Windows uses the fallback.
 
-The native path accepts high-S signatures for verification. Signing with `randomK`, or with a digest at or above the curve order, uses Bitcore's JavaScript signer to preserve its nonce behavior. When a caller requests the precise verification error for a rejected signature, the wrapper uses the original point calculation to distinguish an infinite point from other invalid signatures.
+The native path accepts high-S signatures for verification. With `randomK`, Bitcore draws each nonce using its existing JavaScript randomness source and passes the candidate to libsecp256k1. Deterministic signing of digests at or above the curve order uses Bitcore's original signer to preserve its nonce behavior. When a caller requests the precise verification error for a rejected signature, the wrapper uses the original point calculation to distinguish an infinite point from other invalid signatures.
 
 The native build and test scripts target Linux and macOS. Signing, converting a private key to a public key, and deriving from a private extended key require OS entropy when the process first initializes the blinded curve context. If entropy is unavailable, the call throws and a later call can retry. This also applies when parsing an extended private key, since Bitcore computes its public key during construction.
 
@@ -117,7 +117,9 @@ Figures are medians of five complete in-process sessions after one warmup. SDK r
 
 ### Rebuild scope
 
-ECDSA, HD derivation, Bitcoin Taproot and Bitcoin Cash Schnorr share the secp256k1 context crate. The KDF crate is independent of the curve code. A single Node adapter exposes all five components. These local release-build measurements used a fresh copy of the workspace, cached dependency sources and one comment-only edit per component.
+The Cargo workspace has separate crates for ECDSA, HD derivation, Bitcoin Taproot, Bitcoin Cash Schnorr, KDFs, Merkle trees, ECIES, Ed25519, account-chain wallet operations and XRPL family seeds. A single Node adapter exposes them. Cargo rebuilds a changed crate and its dependents. For example, the wallet signing crate depends on ECDSA, while the Merkle, Ed25519 and KDF crates build independently of ECDSA. The final local XRPL derivation build compiled the XRPL key crate and the Node adapter in 0.61 s with dependencies cached.
+
+The following measurements are from the earlier five-component workspace. They used a fresh copy, cached dependency sources and one comment-only edit per component.
 
 | Change | Workspace crates rebuilt | Elapsed |
 | --- | --- | ---: |
@@ -181,3 +183,11 @@ The table gives median rates on Linux x64 with Node 24.22.3 and an Intel Core Ul
 | Dogecoin | Parse compressed public key | 3,790 | 218,677 | 57.7× |
 | Dogecoin | Private path | 774 | 6,921 | 8.9× |
 | Dogecoin | Watch-only path | 684 | 8,541 | 12.5× |
+
+### EVM and XRP wallet providers
+
+The EVM transaction providers share the EVM signing, hashing, and recovery implementation. This covers ETH, ARB, BASE, OP, MATIC, and ARC, their registered ERC-20 providers, and the ETH and MATIC multisig contracts. The providers still use ethers for transaction parsing and encoding and Web3 for contract ABI encoding. Canonical type 0, 1, and 2 transactions use one recovery when a submitted unsigned transaction matches the parsed unsigned bytes. Other recovery and transaction types use the ethers path. EVM address derivation uses Keccak-256 and EIP-55. The EVM, XRP, and legacy SOL message routes retain their existing Ethereum message prefix and count JavaScript string length before UTF-8 encoding.
+
+XRPL retains responsibility for transaction validation, binary encoding, address Base58Check encoding, and verification through the SDK. XRP payment, account-set, and account-delete signing can use native secp256k1 with low-S DER output or native Ed25519 over the original XRPL signing bytes. Ticket payments use the same signing path. Issued-currency payments, multisign handling, unusual key encodings, and larger signing preimages use the SDK. The native signing path accepts preimages through 4,096 bytes for XRP secp256k1 and through 1,232 bytes for XRP Ed25519. XRP transaction hashing retains the XRPL transaction ID prefix and uppercase SHA-512-half output.
+
+`node native/test-cwc-ledgers.cjs` compares canonical serialized transactions, signatures, hashes, addresses, and errors with both backends after compiling crypto-wallet-core. It checks the XRPL SDK can verify both kinds of signature and confirms each native entry point runs. `node packages/crypto-wallet-core/benchmark/ledgers.js` runs five alternating rounds with 100 ms warmups and 300 ms samples.

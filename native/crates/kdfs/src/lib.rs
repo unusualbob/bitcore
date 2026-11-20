@@ -1,10 +1,21 @@
 use hmac::Hmac;
-use sha2::Sha512;
+use sha2::{Digest, Sha512};
 
 /// Derives a BIP39 seed from the already normalized phrase and salt bytes.
 pub fn bip39_seed(phrase: &[u8], salt: &[u8], seed: &mut [u8; 64]) {
     pbkdf2::pbkdf2::<Hmac<Sha512>>(phrase, salt, 2048, seed)
         .expect("HMAC supports keys of any length");
+}
+
+/// Hashes a Bitcoin Core wallet's passphrase followed by its salt, then rehashes the digest.
+pub fn bitcoin_core_wallet_key(input: &[u8], rounds: u32, key: &mut [u8; 64]) {
+    let mut hash = Sha512::new();
+    hash.update(input);
+    hash.finalize_into_reset((&mut *key).into());
+    for _ in 1..rounds {
+        hash.update(key.as_slice());
+        hash.finalize_into_reset((&mut *key).into());
+    }
 }
 
 /// Hashes the 80-byte proof-of-work header for Dogecoin or Litecoin.

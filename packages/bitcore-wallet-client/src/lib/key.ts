@@ -68,6 +68,13 @@ export interface ExportedKey {
   mnemonicHasPassphrase: boolean;
   fingerPrintUpdated?: boolean;
 };
+type MnemonicValidation = { checked: boolean };
+type DerivedKey = {
+  xPrivKey: Bitcore.HDPrivateKey;
+  eddsaPublicKey?: string;
+  ecdsaRoot?: Bitcore.HDPrivateKey;
+};
+
 interface AddKeyOptions {
   passphrase?: string;
   password?: PasswordMaybe;
@@ -245,17 +252,20 @@ export class Key {
           algo
         });
         if (!this.#getPrivKeyEncrypted({ algo })) throw new Error('Could not encrypt');
-        this.#mnemonicEncrypted = JSON.stringify(Encryption.encryptWithPassword(
-          m.phrase,
-          opts.password,
-          opts.encryptionOpts
-        ));
-        if (!this.#mnemonicEncrypted) throw new Error('Could not encrypt');
       } else {
         this.#setPrivKey({ value: xpriv.toString(), algo });
-        this.#mnemonic = m.phrase;
-        this.#mnemonicHasPassphrase = !!opts.passphrase;
       }
+    }
+    if (opts.password) {
+      this.#mnemonicEncrypted = JSON.stringify(Encryption.encryptWithPassword(
+        m.phrase,
+        opts.password,
+        opts.encryptionOpts
+      ));
+      if (!this.#mnemonicEncrypted) throw new Error('Could not encrypt');
+    } else {
+      this.#mnemonic = m.phrase;
+      this.#mnemonicHasPassphrase = !!opts.passphrase;
     }
   }
 
@@ -408,6 +418,15 @@ export class Key {
   };
 
   get(password?: PasswordMaybe, algo?: KeyAlgorithm) {
+    return this.#readKey(password, algo);
+  };
+
+  // Derivations share the result of validating the mnemonic within one operation.
+  #readKey(password?: PasswordMaybe, algo?: KeyAlgorithm, mnemonicValidation?: MnemonicValidation) {
+    if (mnemonicValidation && this.get !== defaultGet) {
+      // Subclasses can perform additional decryption in get(), as TssKey does.
+      return this.get(password, algo);
+    }
     const key: ExportedKey = {
       xPrivKey: '',
       mnemonic: '',
@@ -420,8 +439,14 @@ export class Key {
         const xPrivKeyEncrypted = this.#getPrivKeyEncrypted({ algo });
         key.xPrivKey = Encryption.decryptWithPassword(xPrivKeyEncrypted, password).toString();
 
-        if (this.#mnemonicEncrypted) {
-          key.mnemonic = Encryption.decryptWithPassword(this.#mnemonicEncrypted, password).toString();
+        if (this.#mnemonicEncrypted && !mnemonicValidation?.checked) {
+          const mnemonic = Encryption.decryptWithPassword(this.#mnemonicEncrypted, password);
+          if (mnemonicValidation) {
+            if (Buffer.isBuffer(mnemonic)) mnemonic.fill(0);
+            mnemonicValidation.checked = true;
+          } else {
+            key.mnemonic = mnemonic.toString();
+          }
         }
       } catch {
         throw new Error('Could not decrypt');
@@ -485,10 +510,23 @@ export class Key {
    * @returns 
    */
   derive(password: PasswordMaybe, path: string, algo?: KeyAlgorithm, network?: string): Bitcore.HDPrivateKey {
+    return this.#derive(password, path, algo, network, { checked: false }).xPrivKey;
+  };
+
+  #derive(
+    password: PasswordMaybe,
+    path: string,
+    algo: KeyAlgorithm | undefined,
+    network: string | undefined,
+    mnemonicValidation: MnemonicValidation
+  ) {
     $.checkArgument(path, 'no path at derive()');
-    let xPrivKey;
+    let xPrivKey: Bitcore.HDPrivateKey;
+    let eddsaPublicKey: string | undefined;
+    let ecdsaRoot: Bitcore.HDPrivateKey | undefined;
     if (algo?.toUpperCase?.() === Constants.ALGOS.EDDSA) {
-      const key = this.#getChildKeyEDDSA(password, path);
+      const key = this.#getChildKeyEDDSA(password, path, mnemonicValidation);
+      eddsaPublicKey = key.pubKey;
       xPrivKey = new Bitcore.HDPrivateKey({
         network: NETWORK,
         depth: 1,
@@ -498,20 +536,29 @@ export class Key {
         privateKey: Bitcore.encoding.Base58.decode(key.privKey),
       });
     } else {
-      xPrivKey = new Bitcore.HDPrivateKey(
-        this.get(password, algo).xPrivKey,
+      ecdsaRoot = new Bitcore.HDPrivateKey(
+        this.#readKey(password, algo, mnemonicValidation).xPrivKey,
         NETWORK
       );
-      const deriveFn = this.compliantDerivation
-        ? xPrivKey.deriveChild.bind(xPrivKey)
-        : xPrivKey.deriveNonCompliantChild.bind(xPrivKey);
-      xPrivKey = deriveFn(path);
+      xPrivKey = this.#deriveEcdsaChild(ecdsaRoot, path);
     }
     if (network && network !== NETWORK) {
       xPrivKey = this.convertXPrivKeyToNetwork(xPrivKey, network);
     }
-    return xPrivKey;
+    return { xPrivKey, eddsaPublicKey, ecdsaRoot };
   };
+
+  #deriveEcdsaChild(root: Bitcore.HDPrivateKey, path: string) {
+    return this.compliantDerivation ? root.deriveChild(path) : root.deriveNonCompliantChild(path);
+  }
+
+  #deriveForOperation(mnemonicValidation: MnemonicValidation, ...args: Parameters<Key['derive']>): DerivedKey {
+    if (this.derive !== defaultDerive || this.get !== defaultGet) {
+      return { xPrivKey: this.derive(...args) };
+    }
+    const [password, path, algo, network] = args;
+    return this.#derive(password, path, algo, network, mnemonicValidation);
+  }
 
   convertXPrivKeyToNetwork(xPrivKey: Bitcore.HDPrivateKey, network: string): Bitcore.HDPrivateKey {
     if (!['testnet', 'regtest'].includes(network)) return xPrivKey;
@@ -633,19 +680,20 @@ export class Key {
     $.shouldBeUndefined(opts['useLegacyPurpose'], 'useLegacyPurpose is deprecated');
 
     const path = this.getBaseAddressDerivationPath(opts);
-    let xPrivKey = this.derive(password, path, algo, opts.network);
-    const requestPrivKey = this.derive(
-      password,
-      Constants.PATHS.REQUEST_KEY,
-    ).privateKey.toString();
+    const mnemonicValidation = { checked: false };
+    const { xPrivKey, eddsaPublicKey, ecdsaRoot } = this.#deriveForOperation(mnemonicValidation, password, path, algo, opts.network);
+    const requestPath = Constants.PATHS.REQUEST_KEY;
+    const requestKey = ecdsaRoot && this.get === defaultGet && this.derive === defaultDerive
+      ? this.#deriveEcdsaChild(ecdsaRoot, requestPath)
+      : this.#deriveForOperation(mnemonicValidation, password, requestPath).xPrivKey;
+    const requestPrivKey = requestKey.privateKey.toString();
 
-    if (['testnet', 'regtest'].includes(opts.network)) {
-      // convert a livenet xPriv to a testnet/regtest xPriv
-      xPrivKey = this.convertXPrivKeyToNetwork(xPrivKey, opts.network);
-    }
+    const credentialsKey = ['testnet', 'regtest'].includes(opts.network)
+      ? this.convertXPrivKeyToNetwork(xPrivKey, opts.network)
+      : xPrivKey;
 
     return Credentials.fromDerivedKey({
-      xPubKey: xPrivKey.hdPublicKey.toString(),
+      xPubKey: credentialsKey.hdPublicKey.toString(),
       coin: opts.coin,
       chain: opts.chain?.toLowerCase() || Utils.getChain(opts.coin), // getChain -> backwards compatibility
       network: opts.network,
@@ -658,7 +706,9 @@ export class Key {
       addressType: opts.addressType,
       walletPrivKey: opts.walletPrivKey,
       copayerName: opts.copayerName,
-      clientDerivedPublicKey: opts.tssXPubKey || (algo === Constants.ALGOS.EDDSA ? this.#getChildKeyEDDSA(password, path)?.pubKey : undefined),
+      clientDerivedPublicKey: opts.tssXPubKey || (algo === Constants.ALGOS.EDDSA
+        ? eddsaPublicKey ?? this.#getChildKeyEDDSA(password, path, mnemonicValidation)?.pubKey
+        : undefined),
     });
   };
 
@@ -704,7 +754,8 @@ export class Key {
       throw new Errors.ENCRYPTED_PRIVATE_KEY();
     }
     const privs = [];
-    const derived = this.derive(password, rootPath);
+    const mnemonicValidation = { checked: false };
+    const { xPrivKey: derived } = this.#deriveForOperation(mnemonicValidation, password, rootPath);
     const xpriv = new Bitcore.HDPrivateKey(derived);
     const t = Utils.buildTx(txp);
     const chain = txp.chain?.toLowerCase() || Utils.getChain(txp.coin); // getChain -> backwards compatibility
@@ -748,7 +799,7 @@ export class Key {
         throw new Error(`Unexpected path. Expected ${expectedPath} but found ${finalPath} (rootPath: ${rootPath})`);
       }
 
-      const key = this.#getChildKeyEDDSA(password, finalPath);
+      const key = this.#getChildKeyEDDSA(password, finalPath, mnemonicValidation);
       const signatures = await Promise.all(
         txArray.map(rawTx => Transactions.getSignature({
           chain: chain.toUpperCase(),
@@ -850,8 +901,11 @@ export class Key {
     }
   }
 
-  #getChildKeyEDDSA(password: PasswordMaybe, path: string) {
-    const privKey = this.get(password, Constants.ALGOS.EDDSA).xPrivKey;
+  #getChildKeyEDDSA(password: PasswordMaybe, path: string, mnemonicValidation: MnemonicValidation) {
+    const privKey = this.#readKey(password, Constants.ALGOS.EDDSA, mnemonicValidation).xPrivKey;
     return Deriver.derivePrivateKeyWithPath('SOL', null, privKey, path, null);
   }
 }
+
+// Capture the built-ins before consumers can wrap methods on Key.prototype.
+const { get: defaultGet, derive: defaultDerive } = Key.prototype;

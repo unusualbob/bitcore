@@ -4,6 +4,7 @@ import { Constants } from '../constants';
 
 
 export * as BI from './bigint';
+export { toChecksumAddress } from './evm-address';
 
 export function isNativeSegwit(addressType) {
   return [

@@ -3,8 +3,13 @@ import * as SolComputeBudget from '@solana-program/compute-budget';
 import * as SolComputeMemo from '@solana-program/memo';
 import * as SolSystem from '@solana-program/system';
 import * as SolToken from '@solana-program/token';
+import { nativeEd25519Sign } from '../../ed25519';
 import type { Key } from '../../types/derivation';
 
+function decodePrivateSeed(value: string): Uint8Array {
+  // The codec allocates these bytes from the string, so the signer can clear them.
+  return SolKit.getBase58Encoder().encode(value) as Uint8Array;
+}
 
 export class SOLTxProvider {
 
@@ -195,29 +200,48 @@ export class SOLTxProvider {
   }
 
   async sign(params: { tx: string; key: Key }): Promise<string> {
-    const { tx, key } = params;
-    const decodedTx = this.decodeRawTransaction({ rawTx: tx, decodeTransactionMessage: false });
-    const privKeyBytes = SolKit.getBase58Encoder().encode(key.privKey);
-    const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
-    const signedTransaciton = await SolKit.signTransaction([keypair], decodedTx);
-    return SolKit.getBase64EncodedWireTransaction(signedTransaciton);
+    return this.#signTransaction(params, false);
   }
 
   async signPartially(params) {
+    return this.#signTransaction(params, true);
+  }
+
+  async #signTransaction(params: { tx: string; key: Key }, partial: boolean): Promise<string> {
     const { tx, key } = params;
     const decodedTx = this.decodeRawTransaction({ rawTx: tx, decodeTransactionMessage: false });
-    const privKeyBytes = SolKit.getBase58Encoder().encode(key.privKey);
-    const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
-    const signedTransaciton = await SolKit.partiallySignTransaction([keypair], decodedTx);
-    return SolKit.getBase64EncodedWireTransaction(signedTransaciton);
+    const privKeyBytes = decodePrivateSeed(key.privKey);
+    try {
+      const native = nativeEd25519Sign(privKeyBytes, decodedTx.messageBytes);
+      if (native) {
+        const address = SolKit.getBase58Decoder().decode(native.publicKey);
+        if (decodedTx.signatures[address] !== undefined) {
+          const signed = { ...decodedTx, signatures: { ...decodedTx.signatures, [address]: native.signature } };
+          if (!partial) SolKit.assertTransactionIsFullySigned(signed);
+          return SolKit.getBase64EncodedWireTransaction(signed);
+        }
+      }
+      const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
+      const signed = partial ? await SolKit.partiallySignTransaction([keypair], decodedTx) :
+        await SolKit.signTransaction([keypair], decodedTx);
+      return SolKit.getBase64EncodedWireTransaction(signed);
+    } finally {
+      privKeyBytes.fill(0);
+    }
   }
 
   async signMessage(params) {
     const { key, messageBytes } = params;
-    const privKeyBytes = SolKit.getBase58Encoder().encode(key.privKey);
-    const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
-    const signedBytes = await SolKit.signBytes(keypair.privateKey, messageBytes);
-    return SolKit.getBase58Decoder().decode(signedBytes);
+    const privKeyBytes = decodePrivateSeed(key.privKey);
+    try {
+      const native = nativeEd25519Sign(privKeyBytes, messageBytes);
+      if (native) return SolKit.getBase58Decoder().decode(native.signature);
+      const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
+      const signedBytes = await SolKit.signBytes(keypair.privateKey, messageBytes);
+      return SolKit.getBase58Decoder().decode(signedBytes);
+    } finally {
+      privKeyBytes.fill(0);
+    }
   }
 
   async getSignature(params: { tx: string; keys: Array<Key> }) {

@@ -12,6 +12,7 @@ const Schnorr = require('../crypto/schnorr');
 const $ = require('../util/preconditions');
 const BufferUtil = require('../util/buffer');
 const Interpreter = require('../script/interpreter');
+const { cachedHash, legacyPreimage, legacyTemplate } = require('./sighash-cache');
 
 const SIGHASH_SINGLE_BUG = '0000000000000000000000000000000000000000000000000000000000000001';
 const BITS_64_ON = 'ffffffffffffffff';
@@ -20,7 +21,7 @@ const BITS_64_ON = 'ffffffffffffffff';
 const DEFAULT_SIGN_FLAGS = Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID;
 
 
-const _sighashForForkId = function(transaction, sighashType, inputNumber, subscript, satoshisBN) {
+const _sighashForForkId = function(transaction, sighashType, inputNumber, subscript, satoshisBN, original) {
   const input = transaction.inputs[inputNumber];
   $.checkArgument(satoshisBN instanceof BN, 'For ForkId=0 signatures, satoshis or complete input must be provided');
 
@@ -74,7 +75,7 @@ const _sighashForForkId = function(transaction, sighashType, inputNumber, subscr
   let hashOutputs = BufferUtil.emptyBuffer(32);
 
   if (!(sighashType & Signature.SIGHASH_ANYONECANPAY)) {
-    hashPrevouts = GetPrevoutHash(transaction);
+    hashPrevouts = cachedHash(original, 'doublePrevouts', () => GetPrevoutHash(transaction));
   }
 
   if (
@@ -82,11 +83,11 @@ const _sighashForForkId = function(transaction, sighashType, inputNumber, subscr
     (sighashType & 31) != Signature.SIGHASH_SINGLE &&
     (sighashType & 31) != Signature.SIGHASH_NONE
   ) {
-    hashSequence = GetSequenceHash(transaction);
+    hashSequence = cachedHash(original, 'doubleSequences', () => GetSequenceHash(transaction));
   }
 
   if ((sighashType & 31) != Signature.SIGHASH_SINGLE && (sighashType & 31) != Signature.SIGHASH_NONE) {
-    hashOutputs = GetOutputsHash(transaction);
+    hashOutputs = cachedHash(original, 'doubleOutputs', () => GetOutputsHash(transaction));
   } else if ((sighashType & 31) == Signature.SIGHASH_SINGLE && inputNumber < transaction.outputs.length) {
     hashOutputs = GetOutputsHash(transaction, inputNumber);
   }
@@ -162,8 +163,16 @@ function sighash(transaction, sighashType, inputNumber, subscript, satoshisBN, f
     flags = DEFAULT_SIGN_FLAGS;
   }
 
-  // Copy transaction
-  const txcopy = Transaction.shallowCopy(transaction);
+  // Fork ID excludes script signatures. The signing operation can reuse its
+  // wire-format snapshot even as signatures are applied to the original.
+  const forkId = typeof sighashType === 'number' && typeof flags === 'number' &&
+    (sighashType & Signature.SIGHASH_FORKID) && (flags & Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID);
+  const template = sighashType === Signature.SIGHASH_ALL && typeof flags === 'number' &&
+    !(flags & Interpreter.SCRIPT_ENABLE_REPLAY_PROTECTION) && Number.isInteger(inputNumber) &&
+    inputNumber >= 0 && legacyTemplate(transaction, Transaction.shallowCopy, inputNumber);
+  const txcopy = forkId
+    ? cachedHash(transaction, 'forkIdTransaction', () => Transaction.shallowCopy(transaction))
+    : template ? undefined : Transaction.shallowCopy(transaction);
 
   // Copy script
   subscript = new Script(subscript);
@@ -178,11 +187,14 @@ function sighash(transaction, sighashType, inputNumber, subscript, satoshisBN, f
   }
 
   if ((sighashType & Signature.SIGHASH_FORKID) && (flags & Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID)) {
-    return _sighashForForkId(txcopy, sighashType, inputNumber, subscript, satoshisBN);
+    return _sighashForForkId(txcopy, sighashType, inputNumber, subscript, satoshisBN, forkId ? transaction : txcopy);
   }
 
   // For no ForkId sighash, separators need to be removed.
   subscript.removeCodeseparators();
+  if (template) {
+    return Hash.sha256sha256(legacyPreimage(template, inputNumber, subscript.toBuffer(), sighashType)).reverse();
+  }
 
   for (let i = 0; i < txcopy.inputs.length; i++) {
     // Blank signatures for other inputs

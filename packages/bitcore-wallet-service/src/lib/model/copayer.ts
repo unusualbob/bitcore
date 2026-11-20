@@ -1,5 +1,4 @@
 import { singleton } from 'preconditions';
-import sjcl from 'sjcl';
 import { Common } from '../common';
 import { Address } from './address';
 import { AddressManager, IAddressManager } from './addressmanager';
@@ -56,8 +55,7 @@ export class Copayer {
   static xPubToCopayerId(coin, xpub) {
     $.checkArgument(xpub, 'Missing xPubKey for copayer id derivation');
     const str = coin == Defaults.COIN ? xpub : coin + xpub;
-    const hash = sjcl.hash.sha256.hash(str);
-    return sjcl.codec.hex.fromBits(hash);
+    return Utils.hashIdentifier(str);
   }
 
   static create(opts) {

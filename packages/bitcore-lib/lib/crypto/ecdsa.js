@@ -3,6 +3,7 @@
 const PublicKey = require('../publickey');
 const BufferUtil = require('../util/buffer');
 const $ = require('../util/preconditions');
+const { hasStandardBNEncoding } = require('./bip32-native');
 const BN = require('./bn');
 const { native } = require('./ecdsa-native');
 const Hash = require('./hash');
@@ -11,6 +12,12 @@ const Random = require('./random');
 const Signature = require('./signature');
 
 const isScalar = (value, order) => value.gt(BN.Zero) && value.lt(order);
+
+const signatureFromCompact = (compact, privkey) => new Signature({
+  r: BN.fromBuffer(compact.subarray(0, 32)),
+  s: BN.fromBuffer(compact.subarray(32)),
+  compressed: privkey.publicKey.compressed
+});
 
 const toCompactSignature = (r, s) => Buffer.concat([
   r.toBuffer({ size: 32 }),
@@ -248,11 +255,7 @@ const sign = function(hashbuf, privkey, opts) {
       key.fill(0);
     }
     if (compact) {
-      return new Signature({
-        r: BN.fromBuffer(compact.subarray(0, 32)),
-        s: BN.fromBuffer(compact.subarray(32)),
-        compressed: privkey.publicKey.compressed
-      });
+      return signatureFromCompact(compact, privkey);
     }
     // For digests at or above N, seed the nonce with the original digest.
   }
@@ -260,26 +263,41 @@ const sign = function(hashbuf, privkey, opts) {
   var e = BN.fromBuffer(hashbuf);
   var G = Point.getG();
   // try different values of k until r, s are valid
-  var badrs = 0;
-  var k, Q, r, s;
-  do {
-    k = randomK ? getRandomK() : getDeterministicK(hashbuf, privkey, badrs);
-    badrs++;
-    Q = G.mul(k);
+  const useNativeNonce = randomK && typeof native?.signWithNonce === 'function';
+  for (let badrs = 0; ; badrs++) {
+    const k = randomK ? getRandomK() : getDeterministicK(hashbuf, privkey, badrs);
+    if (useNativeNonce && d instanceof BN && hasStandardBNEncoding(d) && isScalar(d, N)) {
+      const key = d.toBuffer({ size: 32 });
+      let nonce;
+      let compact;
+      try {
+        nonce = k.toBuffer({ size: 32 });
+        compact = native.signWithNonce(hashbuf, key, nonce);
+      } finally {
+        key.fill(0);
+        nonce?.fill(0);
+      }
+      if (compact) {
+        return signatureFromCompact(compact, privkey);
+      }
+      // A zero r or s requires another draw from the same Random source.
+      continue;
+    }
+
+    const Q = G.mul(k);
     // elliptic point coordinates may come from a different bn.js instance in
     // bundled runtimes. Point#getX() normalizes back into bitcore's BN type
     // before modular arithmetic.
-    r = Q.getX().umod(N);
-    s = k.invm(N).mul(e.add(d.mul(r))).umod(N);
-  } while (r.cmp(BN.Zero) <= 0 || s.cmp(BN.Zero) <= 0);
-
-  s = toLowS(s);
-
-  return new Signature({
-    s: BN.fromBuffer(s.toBuffer()),
-    r: BN.fromBuffer(r.toBuffer()),
-    compressed: privkey.publicKey.compressed
-  });
+    const r = Q.getX().umod(N);
+    const s = k.invm(N).mul(e.add(d.mul(r))).umod(N);
+    if (r.cmp(BN.Zero) > 0 && s.cmp(BN.Zero) > 0) {
+      return new Signature({
+        s: BN.fromBuffer(toLowS(s).toBuffer()),
+        r: BN.fromBuffer(r.toBuffer()),
+        compressed: privkey.publicKey.compressed
+      });
+    }
+  }
 };
 
 

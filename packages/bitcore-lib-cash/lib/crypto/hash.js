@@ -5,6 +5,8 @@ var BufferUtil = require('../util/buffer');
 var $ = require('../util/preconditions');
 
 var Hash = module.exports;
+const hasFipsCheck = typeof nodeCrypto.getFips === 'function';
+const hasOneShotHash = hasFipsCheck && typeof nodeCrypto.hash === 'function';
 
 Hash.sha1 = function(buf) {
   $.checkArgument(BufferUtil.isBuffer(buf));
@@ -15,6 +17,9 @@ Hash.sha1.blocksize = 512;
 
 Hash.sha256 = function(buf) {
   $.checkArgument(BufferUtil.isBuffer(buf));
+  if (hasOneShotHash && !nodeCrypto.getFips()) {
+    return nodeCrypto.hash('sha256', buf, 'buffer');
+  }
   return nodeCrypto.createHash('sha256').update(buf).digest();
 };
 
@@ -42,6 +47,11 @@ Hash.sha512 = function(buf) {
 
 Hash.sha512.blocksize = 1024;
 
+const sha256 = Hash.sha256;
+const sha512 = Hash.sha512;
+// Browser crypto shims use the existing HMAC implementation.
+const hasNativeHmac = hasFipsCheck && typeof nodeCrypto.createHmac === 'function';
+
 Hash.hmac = function(hashf, data, key) {
   // http://en.wikipedia.org/wiki/Hash-based_message_authentication_code
   // http://tools.ietf.org/html/rfc4868#section-2
@@ -50,6 +60,16 @@ Hash.hmac = function(hashf, data, key) {
   $.checkArgument(hashf.blocksize);
 
   var blocksize = hashf.blocksize / 8;
+
+  // Keep the generic path for custom hash functions and historical typed-array keys.
+  if (hasNativeHmac && Buffer.isBuffer(data) && Buffer.isBuffer(key) && !nodeCrypto.getFips()) {
+    if (hashf === sha256 && blocksize === 64) {
+      return nodeCrypto.createHmac('sha256', key).update(data).digest();
+    }
+    if (hashf === sha512 && blocksize === 128) {
+      return nodeCrypto.createHmac('sha512', key).update(data).digest();
+    }
+  }
 
   if (key.length > blocksize) {
     key = hashf(key);

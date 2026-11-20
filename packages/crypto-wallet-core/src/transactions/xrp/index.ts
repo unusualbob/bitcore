@@ -1,11 +1,14 @@
-import { createHash } from 'crypto';
 import * as RBC from 'ripple-binary-codec';
 import * as binary from 'ripple-binary-codec/dist/binary';
 import { HashPrefix } from 'ripple-binary-codec/dist/hash-prefixes';
 import * as xrpl from 'xrpl';
+import { nativeCrypto } from '../../native';
 import * as Utils from '../../utils';
+import { sha512Half, supportsXrpSigning, trySignXrp } from '../../wallet-crypto';
 import { BTCTxProvider } from '../btc';
 import type { Key } from '../../types/derivation';
+
+const TRANSACTION_ID_PREFIX = Buffer.from(HashPrefix.transactionID).toString('hex').toUpperCase();
 
 export class XRPTxProvider {
   create(params: {
@@ -82,12 +85,18 @@ export class XRPTxProvider {
 
   getSignatureObject(params: { tx: string; key: Key }) {
     const { tx, key } = params;
-    const txJSON = (xrpl.decode(tx) as unknown) as xrpl.Payment;
-    const signedTx = new xrpl.Wallet(key.pubKey.toUpperCase(), key.privKey.toUpperCase()).sign(txJSON);
-    return { signedTransaction: signedTx.tx_blob, hash: signedTx.hash };
+    const { signedTransaction, hash } = this.signTransaction(tx, key);
+    return { signedTransaction, hash: hash ?? hashSignedTransaction(signedTransaction) };
   }
 
   getSignature(params: { tx: string; key: Key }): string {
+    const { tx, key } = params;
+    if ((typeof nativeCrypto?.cwcXrpSign === 'function' || typeof nativeCrypto?.ed25519Sign === 'function') &&
+        this.getSignatureObject === getSignatureObject) {
+      const result = this.signTransaction(tx, key);
+      if (result.signature) return result.signature;
+      return (xrpl.decode(result.signedTransaction) as unknown as xrpl.Transaction).TxnSignature;
+    }
     const { signedTransaction } = this.getSignatureObject(params);
     const decoded = (xrpl.decode(signedTransaction) as any) as xrpl.Transaction;
     return decoded.TxnSignature;
@@ -95,8 +104,7 @@ export class XRPTxProvider {
 
   getHash(params: { tx: string }): string {
     const { tx } = params;
-    const prefix = HashPrefix.transactionID.toString('hex').toUpperCase();
-    return this.sha512Half(prefix + tx);
+    return this.sha512Half(TRANSACTION_ID_PREFIX + tx);
   }
 
   /**
@@ -124,11 +132,21 @@ export class XRPTxProvider {
   }
 
   sha512Half(hex: string): string {
-    return createHash('sha512')
-      .update(Buffer.from(hex, 'hex'))
-      .digest('hex')
-      .toUpperCase()
-      .slice(0, 64);
+    return sha512Half(hex);
+  }
+
+  private signTransaction(tx: string, key: Key): { signedTransaction: string; hash?: string; signature?: string } {
+    const decoded = xrpl.decode(tx) as unknown as xrpl.Transaction;
+    if (canSignXrp(decoded, key)) {
+      xrpl.validate(decoded as unknown as Record<string, unknown>);
+      const toSign = { ...decoded, SigningPubKey: key.pubKey.toUpperCase() };
+      const signature = trySignXrp(xrpl.encodeForSigning(toSign), key.privKey);
+      if (signature) {
+        return { signedTransaction: xrpl.encode({ ...toSign, TxnSignature: signature }), signature };
+      }
+    }
+    const signed = new xrpl.Wallet(key.pubKey.toUpperCase(), key.privKey.toUpperCase()).sign(decoded);
+    return { signedTransaction: signed.tx_blob, hash: signed.hash };
   }
 
   transformSignatureObject(params: { obj: any }) {
@@ -164,4 +182,21 @@ export class XRPTxProvider {
       return acc;
     }, {} as T);
   }
+}
+
+const getSignatureObject = XRPTxProvider.prototype.getSignatureObject;
+
+function canSignXrp(transaction: xrpl.Transaction, key: Key) {
+  // Wallet.sign normalizes issued amounts and rejects preexisting signatures.
+  // Other transaction types and key encodings remain with the vendor path.
+  return !transaction.TxnSignature && !('Signers' in transaction) &&
+    (transaction.TransactionType === 'AccountSet' || transaction.TransactionType === 'AccountDelete' ||
+      (transaction.TransactionType === 'Payment' && typeof transaction.Amount === 'string')) &&
+    !Object.values(transaction).some(value => value == null) &&
+    typeof key?.pubKey === 'string' && /^(?:02|03|ed)[0-9a-f]{64}$/i.test(key.pubKey) &&
+    supportsXrpSigning(key.privKey);
+}
+
+function hashSignedTransaction(transaction: string) {
+  return sha512Half(TRANSACTION_ID_PREFIX + transaction);
 }

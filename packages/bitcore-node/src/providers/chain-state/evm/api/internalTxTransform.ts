@@ -1,6 +1,7 @@
 import { MongoBound } from '../../../../models/base';
 import { IWalletAddress, WalletAddressStorage } from '../../../../models/walletAddress';
 import { TransformWithEventPipe } from '../../../../utils/streamWithEventPipe';
+import { checksumAddress } from '../checksum-address';
 import { Effect, IEVMTransactionInProcess, IEVMTransactionTransformed } from '../types';
 import type { Web3 } from '@bitpay-labs/crypto-wallet-core';
 
@@ -87,6 +88,6 @@ export class InternalTxRelatedFilterTransform extends TransformWithEventPipe {
         await cursor.close();
       }
     }
-    return this.walletAddresses.map(walletAddress => this.web3.utils.toChecksumAddress(walletAddress.address));
+    return this.walletAddresses.map(walletAddress => checksumAddress(walletAddress.address, this.web3.utils));
   }
 }

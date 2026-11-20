@@ -2,7 +2,9 @@
 
 import * as chai from 'chai';
 import 'chai/register-should';
+import secp256k1 from 'secp256k1';
 import sinon from 'sinon';
+import sjcl from 'sjcl';
 import { Utils } from '../src/lib/common/utils';
 import { logger } from '../src/lib/logger';
 
@@ -71,6 +73,18 @@ describe('Utils', function() {
     });
   });
 
+  describe('#hashIdentifier', function() {
+    it('preserves SJCL SHA-256 hex across identifier formats and UTF-8', function() {
+      for (const id of ['wallet-123', 'f'.repeat(64), 'xpub-ábç', 'wallet-₿-🚀']) {
+        Utils.hashIdentifier(id).should.equal(sjcl.codec.hex.fromBits(sjcl.hash.sha256.hash(id)));
+      }
+    });
+
+    it('preserves SJCL rejection of malformed UTF-16', function() {
+      should.throw(() => Utils.hashIdentifier('id-\uD800'), URIError);
+    });
+  });
+
   describe('#verifyMessage', function() {
     afterEach(function() {
       sinon.restore();
@@ -127,6 +141,17 @@ describe('Utils', function() {
       const res = Utils.verifyMessage('hola', '3045022100d6186930e4cd9984e3168e15535e2297988555838ad10126d6c20d4ac0e74eb502201095a6319ea0a0de1f1e5fb50f7bf10b8069de10e0083e23dbbf8de9b8e02785', '03bec86ad4a8a91fe7c11ec06af27246ec55094db3d86098b7d8b2f12afe47627f');
       should.exist(res);
       res.should.equal(true);
+    });
+    it('should reject a high-S encoding of an otherwise valid DER signature', function() {
+      const der = Buffer.from('3045022100d6186930e4cd9984e3168e15535e2297988555838ad10126d6c20d4ac0e74eb502201095a6319ea0a0de1f1e5fb50f7bf10b8069de10e0083e23dbbf8de9b8e02785', 'hex');
+      const compact = Buffer.from(secp256k1.signatureImport(der));
+      const order = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+      const lowS = BigInt('0x' + compact.subarray(32).toString('hex'));
+      const highS = Buffer.from((order - lowS).toString(16).padStart(64, '0'), 'hex');
+      highS.copy(compact, 32);
+      const highDer = Buffer.from(secp256k1.signatureExport(compact));
+      const pubkey = '03bec86ad4a8a91fe7c11ec06af27246ec55094db3d86098b7d8b2f12afe47627f';
+      Utils.verifyMessage('hola', highDer, pubkey).should.equal(false);
     });
     it('should verify paypro message', function() {
       const message = [

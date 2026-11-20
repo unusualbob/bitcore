@@ -9,6 +9,7 @@ var BufferReader = require('../encoding/bufferreader');
 var BufferWriter = require('../encoding/bufferwriter');
 var BN = require('../crypto/bn');
 var Hash = require('../crypto/hash');
+const { cachedHash } = require('./sighash-cache');
 var ECDSA = require('../crypto/ecdsa');
 var $ = require('../util/preconditions');
 var _ = require('lodash');
@@ -33,36 +34,42 @@ var sighash = function sighash(transaction, sighashType, inputNumber, scriptCode
   var hashOutputs = Buffer.alloc(32);
 
   if (!(sighashType & Signature.SIGHASH_ANYONECANPAY)) {
-    var buffers = [];
-    for (var n = 0; n < transaction.inputs.length; n++) {
-      var input = transaction.inputs[n];
-      var prevTxIdBuffer = new BufferReader(input.prevTxId).readReverse();
-      buffers.push(prevTxIdBuffer);
-      var outputIndexBuffer = Buffer.alloc(4);
-      outputIndexBuffer.writeUInt32LE(input.outputIndex, 0);
-      buffers.push(outputIndexBuffer);
-    }
-    hashPrevouts = Hash.sha256sha256(Buffer.concat(buffers));
+    hashPrevouts = cachedHash(transaction, 'doublePrevouts', () => {
+      var buffers = [];
+      for (var n = 0; n < transaction.inputs.length; n++) {
+        var input = transaction.inputs[n];
+        var prevTxIdBuffer = new BufferReader(input.prevTxId).readReverse();
+        buffers.push(prevTxIdBuffer);
+        var outputIndexBuffer = Buffer.alloc(4);
+        outputIndexBuffer.writeUInt32LE(input.outputIndex, 0);
+        buffers.push(outputIndexBuffer);
+      }
+      return Hash.sha256sha256(Buffer.concat(buffers));
+    });
   }
 
   if (!(sighashType & Signature.SIGHASH_ANYONECANPAY) &&
       (sighashType & 0x1f) !== Signature.SIGHASH_SINGLE && (sighashType & 0x1f) !== Signature.SIGHASH_NONE) {
 
-    var sequenceBuffers = [];
-    for (var m = 0; m < transaction.inputs.length; m++) {
-      var sequenceBuffer = Buffer.alloc(4);
-      sequenceBuffer.writeUInt32LE(transaction.inputs[m].sequenceNumber, 0);
-      sequenceBuffers.push(sequenceBuffer);
-    }
-    hashSequence = Hash.sha256sha256(Buffer.concat(sequenceBuffers));
+    hashSequence = cachedHash(transaction, 'doubleSequences', () => {
+      var sequenceBuffers = [];
+      for (var m = 0; m < transaction.inputs.length; m++) {
+        var sequenceBuffer = Buffer.alloc(4);
+        sequenceBuffer.writeUInt32LE(transaction.inputs[m].sequenceNumber, 0);
+        sequenceBuffers.push(sequenceBuffer);
+      }
+      return Hash.sha256sha256(Buffer.concat(sequenceBuffers));
+    });
   }
 
   var outputWriter = new BufferWriter();
   if ((sighashType & 0x1f) !== Signature.SIGHASH_SINGLE && (sighashType & 0x1f) !== Signature.SIGHASH_NONE) {
-    for (var p = 0; p < transaction.outputs.length; p++) {
-      transaction.outputs[p].toBufferWriter(outputWriter);
-    }
-    hashOutputs = Hash.sha256sha256(outputWriter.toBuffer());
+    hashOutputs = cachedHash(transaction, 'doubleOutputs', () => {
+      for (var p = 0; p < transaction.outputs.length; p++) {
+        transaction.outputs[p].toBufferWriter(outputWriter);
+      }
+      return Hash.sha256sha256(outputWriter.toBuffer());
+    });
   } else if ((sighashType & 0x1f) === Signature.SIGHASH_SINGLE && inputNumber < transaction.outputs.length) {
     transaction.outputs[inputNumber].toBufferWriter(outputWriter);
     hashOutputs = Hash.sha256sha256(outputWriter.toBuffer());

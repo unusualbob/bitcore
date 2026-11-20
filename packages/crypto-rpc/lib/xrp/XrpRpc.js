@@ -1,10 +1,71 @@
 import EventEmitter from 'events';
+import { createHash } from 'node:crypto';
 import util from 'util';
 import { xrpl } from '@bitpay-labs/crypto-wallet-core';
 import promptly from 'promptly';
+import { nativeCrypto } from '../native.js';
+import { walletFromSeed } from './wallet.js';
 import { XrpClientAdapter } from './XrpClientAdapter.js';
 
 const passwordPromptAsync = util.promisify(promptly.password);
+const MAX_NATIVE_ED25519_BYTES = 1232;
+const MAX_NATIVE_XRP_BYTES = 4096;
+// The XRPL transaction-ID domain is the four bytes "TXN\0".
+const TRANSACTION_ID_PREFIX = Buffer.from('54584e00', 'hex');
+
+function hashSignedTransaction(rawTx) {
+  if (typeof rawTx === 'string' && rawTx.length > 0 && rawTx.length % 2 === 0 && !/[^0-9a-f]/i.test(rawTx)) {
+    return createHash('sha512').update(TRANSACTION_ID_PREFIX).update(rawTx, 'hex').digest('hex').slice(0, 64).toUpperCase();
+  }
+  return xrpl.hashes.hashSignedTx(rawTx);
+}
+
+function signXrpMessage(sign, ed25519, secretKey, message) {
+  if (ed25519) {
+    const result = sign(secretKey, message);
+    if (!Buffer.isBuffer(result) || result.length !== 96) throw new Error('Invalid native XRP Ed25519 result');
+    return result.subarray(32);
+  }
+  const signature = sign(message, secretKey);
+  if (signature === null) return;
+  if (!Buffer.isBuffer(signature) || signature.length < 8 || signature.length > 72 ||
+      signature[0] !== 0x30 || signature[1] !== signature.length - 2) {
+    throw new Error('Invalid native XRP DER signature');
+  }
+  return signature;
+}
+
+function trySignPayment(wallet, prepared) {
+  // Wallet.sign also handles issued-currency and multisign transactions. This
+  // path covers only the unsigned XRP payments constructed by signTransaction.
+  if (prepared?.TransactionType !== 'Payment' || typeof prepared.Amount !== 'string' ||
+      prepared.TxnSignature != null || prepared.Signers != null) return;
+
+  const { privateKey, publicKey } = wallet;
+  const ed25519 = /^ED[0-9a-f]{64}$/i.test(privateKey);
+  const sign = ed25519 ? nativeCrypto?.ed25519Sign : nativeCrypto?.cwcXrpSign;
+  if (typeof sign !== 'function' || (!ed25519 && !/^00[0-9a-f]{64}$/i.test(privateKey))) return;
+
+  const tx = Object.fromEntries(Object.entries(prepared).filter(([, value]) => value != null));
+  xrpl.validate(tx);
+  tx.SigningPubKey = publicKey;
+  const message = Buffer.from(xrpl.encodeForSigning(tx), 'hex');
+  if (!message.length || message.length > (ed25519 ? MAX_NATIVE_ED25519_BYTES : MAX_NATIVE_XRP_BYTES)) return;
+
+  const secretKey = Buffer.from(privateKey.slice(2), 'hex');
+  try {
+    const signature = signXrpMessage(sign, ed25519, secretKey, message);
+    if (!signature) return;
+    tx.TxnSignature = signature.toString('hex').toUpperCase();
+    const blob = xrpl.encode(tx);
+    // Wallet.sign validates the encoded signed transaction when it computes
+    // the hash. The RPC only returns the blob, but preserve that validation.
+    xrpl.hashes.hashSignedTx(blob);
+    return blob;
+  } finally {
+    secretKey.fill(0);
+  }
+}
 
 export class XrpRpc {
   constructor(config) {
@@ -73,7 +134,7 @@ export class XrpRpc {
       err.conclusive = true; // used by server
       throw err;
     }
-    const wallet = xrpl.Wallet.fromSeed(secret);
+    const wallet = walletFromSeed(secret);
     const payment = {
       TransactionType: 'Payment',
       Account: wallet.address,
@@ -87,6 +148,8 @@ export class XrpRpc {
       payment.InvoiceID = invoiceID;
     }
     const prepared = await this.asyncCall('autofill', payment);
+    const blob = trySignPayment(wallet, prepared);
+    if (blob) return blob;
     const signed = wallet.sign(prepared);
     return signed.tx_blob;
   }
@@ -163,7 +226,7 @@ export class XrpRpc {
     const txJSON = xrpl.decode(rawTx);
 
     if (txJSON.TxnSignature) {
-      txJSON.hash = xrpl.hashes.hashSignedTx(rawTx);
+      txJSON.hash = hashSignedTransaction(rawTx);
     }
 
     return txJSON;

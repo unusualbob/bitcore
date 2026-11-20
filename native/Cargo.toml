@@ -1,12 +1,17 @@
 [workspace]
 members = [
     "crates/bch-schnorr",
+    "crates/cwc-crypto",
     "crates/ecdsa",
+    "crates/ecies",
+    "crates/ed25519",
     "crates/hdkeys",
     "crates/kdfs",
+    "crates/merkle",
     "crates/node",
     "crates/secp-context",
     "crates/taproot",
+    "crates/xrp-keys",
 ]
 resolver = "2"
 

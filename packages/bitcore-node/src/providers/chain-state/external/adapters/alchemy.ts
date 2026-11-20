@@ -3,6 +3,7 @@ import axios from 'axios';
 import config from '../../../../config';
 import logger from '../../../../logger';
 import { EthDater } from '../../../../utils/ethDater';
+import { checksumAddress } from '../../evm/checksum-address';
 import { EVMTransactionStorage } from '../../evm/models/transaction';
 import { ExternalApiStream } from '../streams/apiStream';
 import {
@@ -208,8 +209,8 @@ export class AlchemyAdapter implements IIndexedAPIAdapter {
       // EIP-1559: effectiveGasPrice is the actual price paid; tx.gasPrice may be maxFeePerGas
       fee: Number(BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice || tx.gasPrice || '0x0')),
       nonce: BigInt(tx.nonce).toString(),
-      to: tx.to ? Web3.utils.toChecksumAddress(tx.to) : '',
-      from: Web3.utils.toChecksumAddress(tx.from),
+      to: tx.to ? checksumAddress(tx.to) : '',
+      from: checksumAddress(tx.from),
       data: tx.input || '0x',
       internal: [],
       calls: [],
@@ -251,8 +252,8 @@ export class AlchemyAdapter implements IIndexedAPIAdapter {
       gasPrice: 0,
       fee: 0,
       nonce: 0,
-      to: transfer.to ? Web3.utils.toChecksumAddress(transfer.to) : '',
-      from: transfer.from ? Web3.utils.toChecksumAddress(transfer.from) : '',
+      to: transfer.to ? checksumAddress(transfer.to) : '',
+      from: transfer.from ? checksumAddress(transfer.from) : '',
       data: '',
       internal: [],
       calls: [],
@@ -297,7 +298,7 @@ export class AlchemyAssetTransferStream extends ExternalApiStream {
     this.requestTimeout = alchemyParams.requestTimeout ?? 30000;
     // Validate address before any requests
     try {
-      Web3.utils.toChecksumAddress(alchemyParams.address);
+      checksumAddress(alchemyParams.address);
     } catch {
       process.nextTick(() => this.emit('error', new AdapterError('Alchemy', AdapterErrorCode.INVALID_REQUEST, `invalid address: ${alchemyParams.address}`)));
     }

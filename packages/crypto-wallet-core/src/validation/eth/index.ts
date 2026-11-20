@@ -1,4 +1,4 @@
-import { utils } from 'web3';
+import { isEvmAddress } from '../../utils/evm-address';
 import type { IValidation } from '../../types/validation';
 
 export class EthValidation implements IValidation {
@@ -9,7 +9,7 @@ export class EthValidation implements IValidation {
   }
 
   validateAddress(_network: string, address: string): boolean {
-    return utils.isAddress(address);
+    return isEvmAddress(address);
   }
 
   validateUri(addressUri: string): boolean {
@@ -18,7 +18,7 @@ export class EthValidation implements IValidation {
     }
     const address = this.extractAddress(addressUri);
     const prefix = this.regex.exec(addressUri);
-    return !!prefix && utils.isAddress(address);
+    return !!prefix && isEvmAddress(address);
   }
 
   protected extractAddress(data) {

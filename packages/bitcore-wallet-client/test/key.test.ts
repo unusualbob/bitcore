@@ -369,6 +369,38 @@ describe('Key', function() {
   });
 
   describe('#createCredentials', function() {
+    it('uses a wrapped prototype getter for both Solana keys and the request key', function() {
+      const key = new Key();
+      const original = Key.prototype.get;
+      const algorithms = [];
+      Key.prototype.get = function(password, algo) {
+        algorithms.push(algo);
+        return original.call(this, password, algo);
+      };
+      try {
+        key.createCredentials(null, { coin: 'sol', chain: 'sol', network: 'livenet', account: 0, n: 1 });
+        algorithms.should.deep.equal(['EDDSA', undefined, 'EDDSA']);
+      } finally {
+        Key.prototype.get = original;
+      }
+    });
+
+    it('preserves the original argument lists for a wrapped prototype deriver', function() {
+      const key = new Key();
+      const original = Key.prototype.derive;
+      const calls = [];
+      Key.prototype.derive = function(...args) {
+        calls.push(args);
+        return original.apply(this, args);
+      };
+      try {
+        const credentials = key.createCredentials(null, { coin: 'btc', network: 'livenet', account: 0, n: 1 });
+        calls.should.deep.equal([[null, credentials.rootPath, 'ECDSA', 'livenet'], [null, 'm/1\'/0']]);
+      } finally {
+        Key.prototype.derive = original;
+      }
+    });
+
     it('should create 1-1 credentials', function() {
       const k = new Key({ seedType: 'extendedPrivateKey', seedData: 'xprv9s21ZrQH143K3zLpjtB4J4yrRfDTEfbrMa9vLZaTAv5BzASwBmA16mdBmZKpMLssw1AzTnm31HAD2pk2bsnZ9dccxaLD48mRdhtw82XoiBi' });
       const cred = k.createCredentials(null, {

@@ -4,9 +4,15 @@ use std::ptr::null_mut;
 use std::sync::atomic::{Ordering, compiler_fence};
 
 mod bch_schnorr;
+mod cwc_crypto;
+mod ecies;
+mod ed25519;
 mod kdfs;
+mod merkle;
 mod points;
+mod random_nonce;
 mod taproot;
+mod xrp_keys;
 
 type Env = *mut c_void;
 type Value = *mut c_void;
@@ -369,7 +375,7 @@ unsafe extern "C" fn derive_public_path(env: Env, info: CallbackInfo) -> Value {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn napi_register_module_v1(env: Env, exports: Value) -> Value {
     entry_point(env, || {
-        let version = js_value(|value| unsafe { napi_create_uint32(env, 2, value) })?;
+        let version = js_value(|value| unsafe { napi_create_uint32(env, 3, value) })?;
         check(
             unsafe { napi_set_named_property(env, exports, c"abiVersion".as_ptr(), version) },
             c"Could not register the Bitcore addon ABI version",
@@ -382,12 +388,18 @@ pub unsafe extern "C" fn napi_register_module_v1(env: Env, exports: Value) -> Va
             (c"derivePrivatePath", derive_private_path),
             (c"derivePublicPath", derive_public_path),
             (c"publicKeyParse", points::parse),
+            (c"eciesKeyMaterial", ecies::key_material),
             (c"signBchSchnorr", bch_schnorr::sign),
             (c"verifyBchSchnorr", bch_schnorr::verify),
         ]
         .into_iter()
+        .chain(cwc_crypto::FUNCTIONS)
+        .chain(ed25519::FUNCTIONS)
         .chain(kdfs::FUNCTIONS)
+        .chain(random_nonce::FUNCTIONS)
+        .chain(merkle::FUNCTIONS)
         .chain(taproot::FUNCTIONS)
+        .chain(xrp_keys::FUNCTIONS)
         {
             let function = js_value(|value| unsafe {
                 napi_create_function(

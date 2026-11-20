@@ -9,6 +9,7 @@ const Schnorr = require('../crypto/schnorr');
 const $ = require('../util/preconditions');
 const TaggedHash = require('../crypto/taggedhash');
 const PrivateKey = require('../privatekey');
+const { cachedHash } = require('./sighash-cache');
 
 /**
  * Returns a buffer of length 32 bytes with the hash that needs to be signed
@@ -60,48 +61,37 @@ function _signatureHash(transaction, sighashType, inputNumber, sigVersion, execD
   ss.writeInt32LE(transaction.version);
   ss.writeUInt32LE(transaction.nLockTime);
   if (inputType !== Signature.SIGHASH_ANYONECANPAY) {
-    const prevoutsBW = new BufferWriter();
-    const spentAmountsBW = new BufferWriter();
-    const spentScriptsBW = new BufferWriter();
-    const sequencesBW = new BufferWriter();
+    const hashes = cachedHash(transaction, 'taprootInputs', () => {
+      const prevoutsBW = new BufferWriter();
+      const spentAmountsBW = new BufferWriter();
+      const spentScriptsBW = new BufferWriter();
+      const sequencesBW = new BufferWriter();
 
-    for(let vin of transaction.inputs) {
-      prevoutsBW.writeReverse(vin.prevTxId);
-      prevoutsBW.writeInt32LE(vin.outputIndex);
+      for(let vin of transaction.inputs) {
+        prevoutsBW.writeReverse(vin.prevTxId);
+        prevoutsBW.writeInt32LE(vin.outputIndex);
 
-      spentAmountsBW.writeUInt64LEBN(vin.output._satoshisBN);
+        spentAmountsBW.writeUInt64LEBN(vin.output._satoshisBN);
 
-      const scriptBuf = vin.output.script.toBuffer();
-      spentScriptsBW.writeUInt8(scriptBuf.length);
-      spentScriptsBW.write(scriptBuf);
+        const scriptBuf = vin.output.script.toBuffer();
+        spentScriptsBW.writeUInt8(scriptBuf.length);
+        spentScriptsBW.write(scriptBuf);
 
-      sequencesBW.writeUInt32LE(vin.sequenceNumber);
-    }
+        sequencesBW.writeUInt32LE(vin.sequenceNumber);
+      }
 
-    // ss << cache.m_prevouts_single_hash;
-    const prevoutsSingleHash = Hash.sha256(prevoutsBW.toBuffer());
-    ss.write(prevoutsSingleHash);
-
-    // ss << cache.m_spent_amounts_single_hash;
-    const spentAmountsSingleHash = Hash.sha256(spentAmountsBW.toBuffer());
-    ss.write(spentAmountsSingleHash);
-
-    // ss << cache.m_spent_scripts_single_hash;
-    const spentScriptsSingleHash = Hash.sha256(spentScriptsBW.toBuffer());
-    ss.write(spentScriptsSingleHash);
-
-    // ss << cache.m_sequences_single_hash;
-    const sequencesSingleHash = Hash.sha256(sequencesBW.toBuffer());
-    ss.write(sequencesSingleHash);
+      return [prevoutsBW, spentAmountsBW, spentScriptsBW, sequencesBW]
+        .map(writer => Hash.sha256(writer.toBuffer()));
+    });
+    for (const hash of hashes) ss.write(hash);
   }
   if (outputType === Signature.SIGHASH_ALL) {
-    const outputsBW = new BufferWriter();
-    for (let vout of transaction.outputs) {
-      outputsBW.write(vout.toBufferWriter().toBuffer());
-    }
-    // ss << cache.m_outputs_single_hash;
-    const outputsSingleHash = Hash.sha256(outputsBW.toBuffer());
-    ss.write(outputsSingleHash);
+    const outputsHash = cachedHash(transaction, 'taprootOutputs', () => {
+      const outputsBW = new BufferWriter();
+      for (const vout of transaction.outputs) outputsBW.write(vout.toBufferWriter().toBuffer());
+      return Hash.sha256(outputsBW.toBuffer());
+    });
+    ss.write(outputsHash);
   }
 
   // Data about the input/prevout being spent

@@ -35,7 +35,9 @@ function encode(data) {
   var base32 = '';
   for (var i=0; i<data.length; i++) {
     var value = data[i];
-    $.checkArgument(0 <= value && value < 32, 'value ' + value);
+    if (typeof value !== 'number' || !(0 <= value && value < 32)) {
+      $.checkArgument(0 <= value && value < 32, 'value ' + value);
+    }
     base32 += CHARSET[value];
   }
   return base32;
@@ -51,7 +53,9 @@ function decode(base32) {
   var data = [];
   for (var i=0; i<base32.length; i++) {
     var value = base32[i];
-    $.checkArgument(value in CHARSET_INVERSE_INDEX, 'value '+ value);
+    if (!(value in CHARSET_INVERSE_INDEX)) {
+      $.checkArgument(false, 'value ' + value);
+    }
     data.push(CHARSET_INVERSE_INDEX[value]);
   }
   return data;

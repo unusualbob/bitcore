@@ -208,12 +208,9 @@ BlockHeader.prototype.toBufferWriter = function toBufferWriter(bw) {
 BlockHeader.prototype.getTargetDifficulty = function getTargetDifficulty(bits) {
   bits = bits || this.bits;
 
-  var target = new BN(bits & 0xffffff);
-  var mov = 8 * ((bits >>> 24) - 3);
-  while (mov-- > 0) {
-    target = target.mul(new BN(2));
-  }
-  return target;
+  const target = new BN(bits & 0xffffff);
+  const shift = 8 * ((bits >>> 24) - 3);
+  return target.iushln(Math.max(0, shift));
 };
 
 /**

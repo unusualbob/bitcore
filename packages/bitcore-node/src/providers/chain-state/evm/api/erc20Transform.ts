@@ -1,6 +1,6 @@
-import { Web3 } from '@bitpay-labs/crypto-wallet-core';
 import { MongoBound } from '../../../../models/base';
 import { TransformWithEventPipe } from '../../../../utils/streamWithEventPipe';
+import { checksumAddress } from '../checksum-address';
 import { IEVMTransactionInProcess, IEVMTransactionTransformed } from '../types';
 
 export class Erc20RelatedFilterTransform extends TransformWithEventPipe {
@@ -9,7 +9,7 @@ export class Erc20RelatedFilterTransform extends TransformWithEventPipe {
   }
 
   async _transform(tx: MongoBound<IEVMTransactionInProcess>, _, done) {
-    this.tokenAddress = Web3.utils.toChecksumAddress(this.tokenAddress);
+    this.tokenAddress = checksumAddress(this.tokenAddress);
     if (tx.effects && tx.effects.length) {
       // Get all effects where contractAddress is tokenAddress
       const tokenRelatedInternalTxs = tx.effects.filter(

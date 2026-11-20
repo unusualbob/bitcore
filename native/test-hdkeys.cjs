@@ -87,12 +87,13 @@ function runCorpus() {
       }
     }
     const loader = require.resolve('../packages/bitcore-lib/lib/crypto/ecdsa-native');
+    const version = addon.abiVersion;
     addon.abiVersion = 99;
     delete require.cache[loader];
     try {
       assert.throws(() => require(loader), /Incompatible Bitcore addon ABI/);
     } finally {
-      addon.abiVersion = 2;
+      addon.abiVersion = version;
     }
   }
   for (const derive of [

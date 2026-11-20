@@ -9,6 +9,7 @@ const BN = require('../crypto/bn');
 const Hash = require('../crypto/hash');
 const ECDSA = require('../crypto/ecdsa');
 const $ = require('../util/preconditions');
+const { legacyPreimage, legacyTemplate } = require('./sighash-cache');
 
 const SIGHASH_SINGLE_BUG = '0000000000000000000000000000000000000000000000000000000000000001';
 const BITS_64_ON = 'ffffffffffffffff';
@@ -30,12 +31,16 @@ function sighash(transaction, sighashType, inputNumber, subscript) {
   const Transaction = require('./transaction');
   const Input = require('./input');
 
-  // Copy transaction
-  const txcopy = Transaction.shallowCopy(transaction);
+  const template = sighashType === Signature.SIGHASH_ALL && Number.isInteger(inputNumber) &&
+    inputNumber >= 0 && legacyTemplate(transaction, Transaction.shallowCopy, inputNumber);
+  const txcopy = template ? undefined : Transaction.shallowCopy(transaction);
 
   // Copy script
   subscript = new Script(subscript);
   subscript.removeCodeseparators();
+  if (template) {
+    return Hash.sha256sha256(legacyPreimage(template, inputNumber, subscript.toBuffer(), sighashType)).reverse();
+  }
 
   for (let i = 0; i < txcopy.inputs.length; i++) {
     // Blank signatures for other inputs

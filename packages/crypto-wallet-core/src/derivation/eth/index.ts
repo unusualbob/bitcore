@@ -1,5 +1,6 @@
 import BitcoreLib from '@bitpay-labs/bitcore-lib';
 import Web3 from 'web3';
+import { nativeCrypto } from '../../native';
 import type { IDeriver } from '../../types/derivation';
 
 export class EthDeriver implements IDeriver {
@@ -27,6 +28,9 @@ export class EthDeriver implements IDeriver {
     const x = ecPoint.getX().toBuffer({ size: 32 });
     const y = ecPoint.getY().toBuffer({ size: 32 });
     const paddedBuffer = Buffer.concat([x, y]);
+    if (typeof nativeCrypto?.cwcEvmAddress === 'function' && paddedBuffer.length === 64) {
+      return nativeCrypto.cwcEvmAddress(paddedBuffer).toString('ascii');
+    }
     const address = Web3.utils.keccak256(`0x${paddedBuffer.toString('hex')}`).slice(26);
     return Web3.utils.toChecksumAddress(address);
   }

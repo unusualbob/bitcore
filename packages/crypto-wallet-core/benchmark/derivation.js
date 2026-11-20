@@ -43,9 +43,8 @@ benchmark(__filename, wallet => {
     operations[chain + 'DeriveReceiveKey'] = () => wallet.Deriver.derivePrivateKey(chain, 'livenet', xpriv, nextIndex++, false);
     if (process.env.BITCORE_ECDSA_BACKEND === 'native') {
       const { native } = require(`@bitpay-labs/${packages[chain] || 'bitcore-lib'}/lib/crypto/ecdsa-native`);
-      // Solana reads the extended key through Bitcore, then derives children in ed25519-hd-key.
-      const method = chain === 'SOL' ? 'publicKeyCreate' : 'derivePrivatePath';
-      confirmNativeDispatch(native, method, operations[chain + 'DeriveReceiveKey'], chain);
+      const methods = chain === 'SOL' ? ['slip10DeriveEd25519', 'ed25519PublicKey'] : ['derivePrivatePath'];
+      for (const method of methods) confirmNativeDispatch(native, method, operations[chain + 'DeriveReceiveKey'], chain);
       if (chain !== 'XRP' && chain !== 'SOL') {
         confirmNativeDispatch(native, 'publicKeyParse', operations[chain + 'AddressFromKey'], chain);
       }

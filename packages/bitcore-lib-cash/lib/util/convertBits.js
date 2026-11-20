@@ -42,7 +42,9 @@ module.exports = function(data, from, to, strict){
   var mask = (1 << to) - 1;
   for (var i=0; i<data.length; i++) {
     var value = data[i];
-    $.checkArgument(!(value < 0 || (value >> from) !== 0), 'value ' + value);
+    if (typeof value !== 'number' || value < 0 || (value >> from) !== 0) {
+      $.checkArgument(!(value < 0 || (value >> from) !== 0), 'value ' + value);
+    }
 
     accumulator = (accumulator << from) | value;
     bits += from;

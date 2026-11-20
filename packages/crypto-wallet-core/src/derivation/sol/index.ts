@@ -1,7 +1,12 @@
 import { HDPrivateKey, encoding } from '@bitpay-labs/bitcore-lib';
 import * as ed25519 from 'ed25519-hd-key';
 import { Paths } from '../paths';
+import { nativeEd25519PublicKey, nativeSlip10Path } from '../../ed25519';
 import type { IDeriver, Key } from '../../types/derivation';
+
+function publicKeyFromSeed(seed: Buffer): Buffer {
+  return nativeEd25519PublicKey(seed) ?? ed25519.getPublicKey(seed, false);
+}
 
 export class SolDeriver implements IDeriver {
   deriveAddress(_network, _xpubkey, _addressIndex, _isChange): string {
@@ -20,7 +25,7 @@ export class SolDeriver implements IDeriver {
     if (!Buffer.isBuffer(privKey)) {
       throw new Error('Expected privKey to be a Buffer');
     }
-    const pubKey = ed25519.getPublicKey(privKey, false);
+    const pubKey = publicKeyFromSeed(privKey);
     return Buffer.from(pubKey).toString('hex');
   }
 
@@ -43,14 +48,15 @@ export class SolDeriver implements IDeriver {
       .split('/')
       .slice(1)
       .map((val) => val.replace("'", ''))
-      .map(el => parseInt(el, 10));
-    return segmented.reduce((parentKeys, segment) => ed25519.CKDPriv(parentKeys, segment + HARDENED_OFFSET), masterKey);
+      .map(el => parseInt(el, 10) + HARDENED_OFFSET);
+    const nativeChild = segmented.length && nativeSlip10Path(masterKey.key, masterKey.chainCode, segmented);
+    return nativeChild || segmented.reduce((parentKeys, index) => ed25519.CKDPriv(parentKeys, index), masterKey);
   }
 
   derivePrivateKeyWithPath(network: string, xprivKey: string, path: string, _addressType: string) {
     const xpriv = new HDPrivateKey(xprivKey, network);
     const child = this.deriveChild({ key: xpriv._buffers.privateKey, chainCode: xpriv._buffers.chainCode }, path);
-    const pubKey = ed25519.getPublicKey(child.key, false);
+    const pubKey = publicKeyFromSeed(child.key);
     const address = encoding.Base58.encode(pubKey);
     // Solana wallets often represent the private key as a KeyPair consisting of the private key + address/public key.
     // The Keypair is usually found in two formats: Base58 or Uint8Array.

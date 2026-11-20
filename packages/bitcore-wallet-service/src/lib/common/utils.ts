@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import {
   BitcoreLib,
   BitcoreLibCash,
@@ -9,6 +10,7 @@ import {
 import _ from 'lodash';
 import { singleton } from 'preconditions';
 import secp256k1 from 'secp256k1';
+import sjcl from 'sjcl';
 import Config from '../../config';
 import { logger } from '../logger';
 import { Constants } from './constants';
@@ -161,6 +163,16 @@ export const Utils = {
       ret = new BitcoreLib.encoding.BufferReader(ret).readReverse();
     }
     return ret;
+  },
+
+  hashIdentifier(value: string): string {
+    // SJCL rejects unpaired UTF-16 surrogates and accepts bit arrays. Preserve
+    // that behavior for inputs outside the usual identifier format.
+    if (typeof value !== 'string' || /[\uD800-\uDFFF]/.test(value)) {
+      return sjcl.codec.hex.fromBits(sjcl.hash.sha256.hash(value));
+    }
+
+    return crypto.hash?.('sha256', value, 'hex') ?? crypto.createHash('sha256').update(value).digest('hex');
   },
 
   /**

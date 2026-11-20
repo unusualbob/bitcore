@@ -4,6 +4,10 @@ var _ = require('lodash');
 var Base58 = require('./base58');
 var sha256sha256 = require('../crypto/hash').sha256sha256;
 
+function checksum(data) {
+  return sha256sha256(data).slice(0, 4);
+}
+
 var Base58Check = function Base58Check(obj) {
   if (!(this instanceof Base58Check))
     return new Base58Check(obj);
@@ -41,7 +45,7 @@ Base58Check.decode = function(s) {
   if (typeof s !== 'string')
     throw new Error('Input must be a string');
 
-  var buf = Buffer.from(Base58.decode(s));
+  var buf = Base58.decode(s);
 
   if (buf.length < 4)
     throw new Error("Input string too short");
@@ -49,18 +53,15 @@ Base58Check.decode = function(s) {
   var data = buf.slice(0, -4);
   var csum = buf.slice(-4);
 
-  var hash = sha256sha256(data);
-  var hash4 = hash.slice(0, 4);
+  var hash4 = checksum(data);
 
-  if (csum.toString('hex') !== hash4.toString('hex'))
+  if (!csum.equals(hash4))
     throw new Error("Checksum mismatch");
 
   return data;
 };
 
-Base58Check.checksum = function(buffer) {
-  return sha256sha256(buffer).slice(0, 4);
-};
+Base58Check.checksum = checksum;
 
 Base58Check.encode = function(buf) {
   if (!Buffer.isBuffer(buf))

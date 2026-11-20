@@ -12,29 +12,18 @@ var decode = function(str) {
     throw new Error('Input should be a string');
   }
 
-  var decoded;
-  let fromWords = bech32.bech32.fromWords;
-  let encoding = encodings.BECH32;
-  try {
-    decoded = bech32.bech32.decode(str);
-  } catch (e) {
-    if (e.message.indexOf('Invalid checksum') > -1) {
-      decoded = bech32.bech32m.decode(str);
-      encoding = encodings.BECH32M;
-      fromWords = bech32.bech32m.fromWords;
-    } else {
-      throw e;
-    }
-  }
+  // Both decoders validate the same format and differ only in the checksum.
+  const original = bech32.bech32.decodeUnsafe(str);
+  const decoded = original || bech32.bech32m.decode(str);
 
   const version = decoded.words[0];
-  if (version >= 1 && encoding !== encodings.BECH32M) {
+  if (version >= 1 && original) {
     throw new Error('Version 1+ witness address must use Bech32m checksum');
   }
 
   return {
     prefix: decoded.prefix,
-    data: Buffer.from(fromWords(decoded.words.slice(1))),
+    data: Buffer.from(bech32.bech32.fromWords(decoded.words.slice(1))),
     version
   };
 };
