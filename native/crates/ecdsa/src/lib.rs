@@ -1,8 +1,8 @@
 use std::fmt;
-use std::sync::OnceLock;
 
+use bitcore_secp_context::{signing_context, verification_context};
 use secp256k1::ecdsa::{RecoverableSignature, RecoveryId, Signature};
-use secp256k1::{Message, PublicKey, Secp256k1, SecretKey, SignOnly, VerifyOnly, constants};
+use secp256k1::{Message, PublicKey, SecretKey, constants};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -31,26 +31,6 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-fn signing_context() -> Result<&'static Secp256k1<SignOnly>, Error> {
-    static CONTEXT: OnceLock<Secp256k1<SignOnly>> = OnceLock::new();
-    if let Some(context) = CONTEXT.get() {
-        return Ok(context);
-    }
-    // Leave initialization retryable if the operating system cannot supply entropy.
-    let mut seed = [0; 32];
-    getrandom::fill(&mut seed).map_err(|_| Error::ContextRandomizationFailed)?;
-    Ok(CONTEXT.get_or_init(|| {
-        let mut context = Secp256k1::signing_only();
-        context.seeded_randomize(&seed);
-        context
-    }))
-}
-
-fn verification_context() -> &'static Secp256k1<VerifyOnly> {
-    static CONTEXT: OnceLock<Secp256k1<VerifyOnly>> = OnceLock::new();
-    CONTEXT.get_or_init(Secp256k1::verification_only)
-}
-
 /// Signs a big-endian digest and produces a compact low-S signature (r || s).
 pub fn sign(digest: &[u8; 32], secret_key: &[u8; 32]) -> Result<[u8; 64], Error> {
     // libsecp256k1 reduces the digest before seeding RFC6979. Bitcore uses
@@ -59,7 +39,7 @@ pub fn sign(digest: &[u8; 32], secret_key: &[u8; 32]) -> Result<[u8; 64], Error>
         return Err(Error::DigestOutOfRange);
     }
 
-    let context = signing_context()?;
+    let context = signing_context().map_err(|_| Error::ContextRandomizationFailed)?;
     let mut secret_key =
         SecretKey::from_byte_array(*secret_key).map_err(|_| Error::InvalidSecretKey)?;
     let signature = context.sign_ecdsa(Message::from_digest(*digest), &secret_key);

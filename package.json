@@ -42,6 +42,8 @@
     "build:ecdsa": "node native/build-node.cjs",
     "test:ecdsa": "cargo test --locked --manifest-path native/Cargo.toml -p bitcore-ecdsa && node native/build-node.cjs && node native/test-binding.cjs && node native/test-parity.cjs",
     "bench:ecdsa": "node packages/bitcore-lib/benchmark/ecdsa.js",
+    "test:hdkeys": "cargo test --locked --manifest-path native/Cargo.toml -p bitcore-hdkeys && node native/build-node.cjs && node native/test-binding.cjs && node native/test-hdkeys.cjs",
+    "bench:hdkeys": "node packages/bitcore-lib/benchmark/hdkeys.js",
     "postinstall": "npm run compile",
     "compile": "npm run compile --workspace=@bitpay-labs/bitcore-logging && npm run compile --workspace=@bitpay-labs/crypto-wallet-core && npm run compile --workspace=@bitpay-labs/bitcore-wallet-service && npm run compile --workspace=@bitpay-labs/bitcore-wallet-client && npm run compile --workspace=@bitpay-labs/bitcore-client && npm run compile --workspace=@bitpay-labs/bitcore-cli && npm run compile --workspace=@bitpay-labs/bitcore-node",
     "build": "docker build -t bitcore-node . ",

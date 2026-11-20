@@ -6,5 +6,5 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-getrandom = "=0.3.4"
+bitcore-secp-context = { path = "../secp-context" }
 secp256k1 = { version = "=0.31.1", default-features = false, features = ["alloc", "recovery"] }

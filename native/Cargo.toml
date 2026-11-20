@@ -1,7 +1,10 @@
 [workspace]
-members = ["crates/ecdsa", "crates/node"]
+members = ["crates/ecdsa", "crates/hdkeys", "crates/node", "crates/secp-context"]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.85"
+
+[workspace.dependencies]
+zeroize = { version = "=1.8.2", default-features = false }

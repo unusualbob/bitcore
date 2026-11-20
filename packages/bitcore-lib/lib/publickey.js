@@ -1,12 +1,15 @@
 'use strict';
 
 const BN = require('./crypto/bn');
+const { native } = require('./crypto/ecdsa-native');
 const Hash = require('./crypto/hash');
 const Point = require('./crypto/point');
 const TaggedHash = require('./crypto/taggedhash');
 const Network = require('./networks');
 const JSUtil = require('./util/js');
 const $ = require('./util/preconditions');
+
+const bnToBuffer = BN.prototype.toBuffer;
 
 /**
  * Instantiate a PublicKey from a {@link PrivateKey}, {@link Point}, `string`, or `Buffer`.
@@ -52,14 +55,39 @@ function PublicKey(data, extra) {
   // validation
   info.point.validate();
 
-  JSUtil.defineImmutable(this, {
+  return initialize(this, info);
+};
+
+function initialize(publicKey, info) {
+  JSUtil.defineImmutable(publicKey, {
     point: info.point,
     compressed: info.compressed,
     network: info.network || Network.defaultNetwork
   });
 
-  return this;
-};
+  return publicKey;
+}
+
+function createNativePoint(bn) {
+  if (typeof native?.publicKeyCreate !== 'function' || !(bn instanceof BN) ||
+      bn.toBuffer !== bnToBuffer || bn.isNeg() || bn.byteLength() > 32) {
+    return;
+  }
+
+  const secret = bn.toBuffer({ size: 32 });
+  try {
+    const sec = native.publicKeyCreate(secret, false);
+    if (sec) {
+      if (!Buffer.isBuffer(sec) || sec.length !== 65 || sec[0] !== 4) {
+        throw new Error('Invalid uncompressed native public key');
+      }
+      // The addon has already constructed a valid curve point.
+      return Point.getG().curve.point(new BN(sec.subarray(1, 33)), new BN(sec.subarray(33, 65)));
+    }
+  } finally {
+    secret.fill(0);
+  }
+}
 
 /**
  * Internal function to differentiate between arguments passed to the constructor
@@ -127,7 +155,7 @@ PublicKey._isBuffer = function(param) {
 PublicKey._transformPrivateKey = function(privkey) {
   $.checkArgument(PublicKey._isPrivateKey(privkey), 'Must be an instance of PrivateKey');
   const info = {};
-  info.point = Point.getG().mul(privkey.bn);
+  info.point = createNativePoint(privkey.bn) || Point.getG().mul(privkey.bn);
   info.compressed = privkey.compressed;
   info.network = privkey.network;
   return info;
@@ -220,6 +248,15 @@ PublicKey._transformObject = function(json) {
  */
 PublicKey.fromPrivateKey = function(privkey) {
   $.checkArgument(PublicKey._isPrivateKey(privkey), 'Must be an instance of PrivateKey');
+  const point = createNativePoint(privkey.bn);
+  if (point) {
+    return initialize(Object.create(PublicKey.prototype), {
+      point,
+      compressed: privkey.compressed === undefined || privkey.compressed,
+      network: privkey.network === undefined ? undefined : Network.get(privkey.network)
+    });
+  }
+
   const info = PublicKey._transformPrivateKey(privkey);
   return new PublicKey(info.point, {
     compressed: info.compressed,

@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bitcore-ecdsa = { path = "../ecdsa" }
+bitcore-hdkeys = { path = "../hdkeys" }

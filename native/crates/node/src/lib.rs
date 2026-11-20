@@ -10,10 +10,14 @@ type Callback = unsafe extern "C" fn(Env, CallbackInfo) -> Value;
 type Status = c_int;
 
 const NAPI_OK: Status = 0;
+const NAPI_UNDEFINED: c_int = 0;
 const NAPI_UINT8_ARRAY: c_int = 1;
+const HARDENED: u32 = 1 << 31;
+const MAX_PATH_DEPTH: usize = 255;
 
 // Stable Node-API symbols provided by Node when it loads the addon.
 unsafe extern "C" {
+    fn napi_create_uint32(env: Env, number: u32, result: *mut Value) -> Status;
     fn napi_get_cb_info(
         env: Env,
         info: CallbackInfo,
@@ -32,6 +36,7 @@ unsafe extern "C" {
         array_buffer: *mut Value,
         byte_offset: *mut usize,
     ) -> Status;
+    fn napi_typeof(env: Env, value: Value, result: *mut c_int) -> Status;
     fn napi_get_value_bool(env: Env, value: Value, result: *mut bool) -> Status;
     fn napi_get_value_double(env: Env, value: Value, result: *mut f64) -> Status;
     fn napi_get_boolean(env: Env, value: bool, result: *mut Value) -> Status;
@@ -161,9 +166,18 @@ fn fixed_buffer<const N: usize>(env: Env, value: Value) -> Result<[u8; N]> {
     Ok(bytes)
 }
 
-struct SecretKeyBytes([u8; 32]);
+struct SecretBytes<const N: usize>([u8; N]);
 
-impl Drop for SecretKeyBytes {
+impl<const N: usize> SecretBytes<N> {
+    fn read(&mut self, env: Env, value: Value, message: &'static CStr) -> Result<()> {
+        if copy_buffer(env, value, &mut self.0)? != self.0.len() {
+            return Err(message);
+        }
+        Ok(())
+    }
+}
+
+impl<const N: usize> Drop for SecretBytes<N> {
     fn drop(&mut self) {
         for byte in &mut self.0 {
             // Volatile writes prevent the compiler from eliding these stores.
@@ -180,19 +194,40 @@ fn output_buffer(env: Env, bytes: &[u8]) -> Result<Value> {
     })
 }
 
+fn null_value(env: Env) -> Result<Value> {
+    js_value(|value| unsafe { napi_get_null(env, value) })
+}
+
+fn boolean(env: Env, value: Value, message: &'static CStr) -> Result<bool> {
+    let mut flag = false;
+    check(
+        unsafe { napi_get_value_bool(env, value, &mut flag) },
+        message,
+    )?;
+    Ok(flag)
+}
+
+fn read_path(env: Env, value: Value, path: &mut [u32; MAX_PATH_DEPTH]) -> Result<usize> {
+    let mut bytes = [0; MAX_PATH_DEPTH * size_of::<u32>()];
+    let length = copy_buffer(env, value, &mut bytes)?;
+    if length == 0 || length % size_of::<u32>() != 0 {
+        return Err(c"Expected 1 to 255 big-endian child indices");
+    }
+    for (index, bytes) in path.iter_mut().zip(bytes[..length].chunks_exact(4)) {
+        *index = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    }
+    Ok(length / size_of::<u32>())
+}
+
 unsafe extern "C" fn sign(env: Env, info: CallbackInfo) -> Value {
     entry_point(env, || {
         let [digest, key] = arguments(env, info)?;
         let digest = fixed_buffer(env, digest)?;
-        let mut secret_key = SecretKeyBytes([0; 32]);
-        if copy_buffer(env, key, &mut secret_key.0)? != secret_key.0.len() {
-            return Err(c"Incorrect native ECDSA secret key length");
-        }
+        let mut secret_key = SecretBytes([0; 32]);
+        secret_key.read(env, key, c"Incorrect native ECDSA secret key length")?;
         match bitcore_ecdsa::sign(&digest, &secret_key.0) {
             Ok(signature) => output_buffer(env, &signature),
-            Err(bitcore_ecdsa::Error::DigestOutOfRange) => {
-                js_value(|value| unsafe { napi_get_null(env, value) })
-            }
+            Err(bitcore_ecdsa::Error::DigestOutOfRange) => null_value(env),
             Err(bitcore_ecdsa::Error::ContextRandomizationFailed) => {
                 Err(c"Cannot initialize ECDSA signing: OS entropy unavailable")
             }
@@ -223,7 +258,6 @@ unsafe extern "C" fn recover(env: Env, info: CallbackInfo) -> Value {
         let digest = fixed_buffer(env, digest)?;
         let signature = fixed_buffer(env, signature)?;
         let mut id = 0.0;
-        let mut compressed = false;
         let id_error = c"Expected a recovery ID between 0 and 3";
         check(
             unsafe { napi_get_value_double(env, recovery_id, &mut id) },
@@ -232,14 +266,96 @@ unsafe extern "C" fn recover(env: Env, info: CallbackInfo) -> Value {
         if !matches!(id, 0.0 | 1.0 | 2.0 | 3.0) {
             return Err(id_error);
         }
-        check(
-            unsafe { napi_get_value_bool(env, compression, &mut compressed) },
-            c"Expected a Boolean compression flag",
-        )?;
+        let compressed = boolean(env, compression, c"Expected a Boolean compression flag")?;
         match bitcore_ecdsa::recover_public_key(&digest, &signature, id as u8, compressed) {
             Ok(public_key) => output_buffer(env, &public_key),
-            Err(_) => js_value(|value| unsafe { napi_get_null(env, value) }),
+            Err(_) => null_value(env),
         }
+    })
+}
+
+unsafe extern "C" fn public_key_create(env: Env, info: CallbackInfo) -> Value {
+    entry_point(env, || {
+        let [key, compression] = arguments(env, info)?;
+        let mut secret_key = SecretBytes([0; 32]);
+        secret_key.read(env, key, c"Incorrect native secret key length")?;
+        let compressed = boolean(env, compression, c"Expected a Boolean compression flag")?;
+        let public_key = bitcore_hdkeys::public_key(&secret_key.0, compressed)
+            .map_err(|_| c"Cannot initialize public key creation: OS entropy unavailable")?;
+        match public_key {
+            Some(public_key) => output_buffer(env, &public_key),
+            None => null_value(env),
+        }
+    })
+}
+
+unsafe extern "C" fn derive_private_path(env: Env, info: CallbackInfo) -> Value {
+    entry_point(env, || {
+        let [key, chain, indices, compatibility, first_parent] = arguments(env, info)?;
+        let mut secret_key = SecretBytes([0; 32]);
+        secret_key.read(env, key, c"Incorrect native secret key length")?;
+        let mut chain_code = SecretBytes([0; 32]);
+        chain_code.read(env, chain, c"Incorrect native chain code length")?;
+        let mut path = [0; MAX_PATH_DEPTH];
+        let length = read_path(env, indices, &mut path)?;
+        let non_compliant = boolean(env, compatibility, c"Expected a Boolean compatibility flag")?;
+        let first_parent = if path[0] < HARDENED {
+            Some(fixed_buffer(env, first_parent)?)
+        } else {
+            let message = c"Expected an undefined public key for a hardened first index";
+            let mut value_type = NAPI_UNDEFINED;
+            check(
+                unsafe { napi_typeof(env, first_parent, &mut value_type) },
+                message,
+            )?;
+            if value_type != NAPI_UNDEFINED {
+                return Err(message);
+            }
+            None
+        };
+
+        let child = bitcore_hdkeys::derive_private(
+            &secret_key.0,
+            &chain_code.0,
+            &path[..length],
+            non_compliant,
+            first_parent.as_ref(),
+        )
+        .map_err(|_| c"Cannot initialize private key derivation: OS entropy unavailable")?;
+        let Some(child) = child else {
+            return null_value(env);
+        };
+        let mut packed = SecretBytes([0; 97]);
+        packed.0[..32].copy_from_slice(&child.secret_key);
+        packed.0[32..64].copy_from_slice(&child.chain_code);
+        // With one step, JavaScript takes the fingerprint from the root object.
+        if let Some(parent) = child.parent_public_key {
+            packed.0[64..].copy_from_slice(&parent);
+        }
+        output_buffer(env, &packed.0)
+    })
+}
+
+unsafe extern "C" fn derive_public_path(env: Env, info: CallbackInfo) -> Value {
+    entry_point(env, || {
+        let [key, chain_code, indices] = arguments(env, info)?;
+        let public_key = fixed_buffer(env, key)?;
+        let chain_code = fixed_buffer(env, chain_code)?;
+        let mut path = [0; MAX_PATH_DEPTH];
+        let length = read_path(env, indices, &mut path)?;
+
+        let Some(child) = bitcore_hdkeys::derive_public(&public_key, &chain_code, &path[..length])
+        else {
+            return null_value(env);
+        };
+        let mut packed = [0; 98];
+        packed[..33].copy_from_slice(&child.public_key);
+        packed[33..65].copy_from_slice(&child.chain_code);
+        // The final slot stays zero when JavaScript already has the parent fingerprint.
+        if let Some(parent) = child.parent_public_key {
+            packed[65..].copy_from_slice(&parent);
+        }
+        output_buffer(env, &packed)
     })
 }
 
@@ -248,10 +364,18 @@ unsafe extern "C" fn recover(env: Env, info: CallbackInfo) -> Value {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn napi_register_module_v1(env: Env, exports: Value) -> Value {
     entry_point(env, || {
+        let version = js_value(|value| unsafe { napi_create_uint32(env, 2, value) })?;
+        check(
+            unsafe { napi_set_named_property(env, exports, c"abiVersion".as_ptr(), version) },
+            c"Could not register the Bitcore addon ABI version",
+        )?;
         for (name, callback) in [
             (c"sign", sign as Callback),
             (c"verify", verify),
             (c"recover", recover),
+            (c"publicKeyCreate", public_key_create),
+            (c"derivePrivatePath", derive_private_path),
+            (c"derivePublicPath", derive_public_path),
         ] {
             let function = js_value(|value| unsafe {
                 napi_create_function(
