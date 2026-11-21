@@ -10,6 +10,7 @@ From the repository root, use the Node version in [`.node-version`](../.node-ver
 | --- | --- |
 | Build the release addon for local use | `npm run build:crypto` |
 | Run the Rust workspace tests, build the addon, compile the TypeScript fixtures’ dependencies and run cross-chain parity checks | `npm run test:crypto` |
+| Build the addon and run the same reference tests with each backend, including source coverage and native dispatch checks | `npm run test:crypto:reference` |
 | Test one component | `npm run test:ecdsa`, `test:hdkeys`, `test:taproot`, `test:forks` or `test:kdfs` (each via `npm run`) |
 
 The build installs the same binary as `lib/native/bitcore_ecdsa.node` in each of the four Bitcoin-family packages. npm tarballs exclude the locally built binary. Browser bundles use the JavaScript backend. Linux x64 is the tested native platform. The build includes macOS linker support for macOS, which is unverified. On Windows, use the fallback.
@@ -25,6 +26,14 @@ Set the environment variable before importing the library. Bitcoin uses `BITCORE
 | `native` | Require a compatible addon at import time. Individual operations can still use their fallback for unsupported inputs or missing exports on an older addon. |
 
 Bitcoin defaults to `auto`. Each fork honors its own selector first. With no fork selector, it inherits a global `js` setting and otherwise uses `auto`. To require native loading for all four packages, set all four selectors to `native`.
+
+## What the reference tests cover
+
+The reference suite measures Bitcore’s own JavaScript and TypeScript implementations of operations accelerated by Rust. The source ranges are listed for [curves and HD keys](reference-curve.json), [hashing, encoding and Merkle trees](reference-hash.json), and [wallets and account chains](reference-chains.json). Where Bitcore delegates an operation to an SDK or Node crypto, the tests compare results at that interface. Coverage percentages apply to the listed Bitcore source ranges.
+
+The runner compiles the TypeScript fixtures and runs the package tests and parity cases in separate processes with all four backend selectors forced. It compares the names and outcomes of the Mocha tests, compares deterministic corpus outputs, and checks known values and expected errors in both modes. The native run must reach every function exported by the built addon through a Bitcore caller and obtain a successful result. Rare cases that deliberately trigger a JavaScript fallback also have assertions for the expected behavior.
+
+The command prints the locations of the logs, V8 profiles and source-mapped coverage reports. It requires every mapped statement, executable line, function declaration and reported branch outcome to run. Four small-block Merkle branches can execute only with an addon loaded. The JavaScript-only report lists them separately, and the combined report requires all four. When a mapped source file changes, review its ranges before updating the fingerprint in [the coverage reporter](reference-coverage.cjs).
 
 ## Compatibility and rebuilds
 

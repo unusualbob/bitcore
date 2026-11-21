@@ -11,7 +11,8 @@ function runCorpus() {
   if (process.env.BITCORE_ECDSA_BACKEND === 'native') {
     addon = require('../packages/bitcore-lib/lib/native/bitcore_ecdsa.node');
     for (const name of ['cwcKeccak256', 'cwcEvmAddress', 'cwcEvmRecoverAddress', 'cwcSignRecoverable',
-      'cwcXrpSign', 'cwcXrpSignLarge', 'cwcXrpAddress', 'ed25519Sign', 'ed25519SignLarge']) {
+      'cwcEvmValidAddress', 'cwcChecksumAddress', 'cwcXrpSign', 'cwcXrpSignLarge',
+      'cwcXrpAddress', 'ed25519Sign', 'ed25519SignLarge']) {
       const method = addon[name];
       assert.equal(typeof method, 'function', 'Rebuild the wallet crypto addon for ' + name);
       counts.set(name, 0);
@@ -21,7 +22,7 @@ function runCorpus() {
       };
     }
   }
-  const { BitcoreLib, Deriver, Message, Transactions, ethers, xrpl } = require('../packages/crypto-wallet-core');
+  const { BitcoreLib, Deriver, Message, Transactions, Utils, Validation, Web3, ethers, xrpl } = require('../packages/crypto-wallet-core');
   const { recoverEvmAddress, signEvmDigest, trySignXrp } = require('../packages/crypto-wallet-core/ts_build/src/wallet-crypto');
   assert.equal(trySignXrp('abcd', 'ed' + '00'.repeat(30)), undefined);
   const results = [];
@@ -46,6 +47,20 @@ function runCorpus() {
     results.push(signature);
   }
   const recipient = new ethers.Wallet('0x' + '31'.repeat(32)).address;
+  // Exercise Web3's public return values and errors for both checksummed and malformed addresses.
+  const body = recipient.slice(2);
+  const inputs = [recipient, '0X' + body, body, body.toLowerCase(), body.toUpperCase(),
+    recipient.replace(/[A-F]/, c => c.toLowerCase()), 'g'.repeat(40), 'é'.repeat(40), '', null];
+  const outcome = fn => {
+    try { return { value: fn() }; } catch (err) { return { name: err.name, message: err.message, code: err.code }; }
+  };
+  for (const address of inputs) {
+    const valid = outcome(() => Validation.validateAddress('ETH', 'mainnet', address));
+    assert.deepEqual(valid, outcome(() => Web3.utils.isAddress(address)));
+    const checksum = outcome(() => Utils.toChecksumAddress(address));
+    assert.deepEqual(checksum, outcome(() => Web3.utils.toChecksumAddress(address)));
+    results.push(valid, checksum);
+  }
   const contractAddress = new ethers.Wallet('0x' + '52'.repeat(32)).address;
   const evmChains = ['ETH', 'ARB', 'BASE', 'OP', 'MATIC', 'ARC'];
   const transactionChains = [...evmChains, ...evmChains.map(chain => chain + 'ERC20'), 'ETHMULTISIG', 'MATICMULTISIG'];

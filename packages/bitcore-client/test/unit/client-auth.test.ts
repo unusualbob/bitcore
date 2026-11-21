@@ -3,6 +3,7 @@ import { BitcoreLib } from '@bitpay-labs/crypto-wallet-core';
 import * as secp256k1 from 'secp256k1';
 import sinon from 'sinon';
 import { Client } from '../../src/client';
+import { native } from '../../src/native';
 
 describe('Client request signing', function() {
   const authKey = new BitcoreLib.PrivateKey('00'.repeat(31) + '01');
@@ -22,7 +23,12 @@ describe('Client request signing', function() {
   it('preserves the signed message and deterministic compact signature', function() {
     const digest = BitcoreLib.crypto.Hash.sha256sha256(Buffer.from(message));
     assert.equal(client.getMessage(params), message);
+    const sign = native && sinon.spy(native, 'sign');
     assert.equal(client.sign(params), legacySignature(digest));
+    if (sign) {
+      assert.equal(sign.callCount, 1);
+      assert.deepEqual(sign.firstCall.args, [digest, authKey.toBuffer()]);
+    }
     assert.equal(client.sign(params), client.sign(params));
     assert.equal(secp256k1.verify(digest, Buffer.from(client.sign(params), 'hex'), authKey.toPublicKey().toBuffer()), true);
     assert.notEqual(client.sign({ ...params, payload: [] }), client.sign(params));

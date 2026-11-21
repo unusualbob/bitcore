@@ -40,6 +40,7 @@
   ],
   "scripts": {
     "build:crypto": "node native/build-node.cjs",
+    "test:crypto:reference": "node native/build-node.cjs && node native/check-reference-backends.cjs",
     "test:crypto": "cargo test --locked --manifest-path native/Cargo.toml --workspace && node native/build-node.cjs && node native/check-crypto.cjs",
     "bench:utxo": "node native/bench-utxo.cjs",
     "bench:keccak": "node packages/crypto-wallet-core/benchmark/large-keccak.js",

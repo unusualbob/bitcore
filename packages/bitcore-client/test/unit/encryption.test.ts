@@ -34,6 +34,17 @@ describe('Bitcoin Core encrypted key import', function() {
   const sandbox = sinon.createSandbox();
   afterEach(() => sandbox.restore());
 
+  it('uses one SHA-512 round when rounds are omitted or zero', function() {
+    const saltBytes = Buffer.from(salt, 'hex');
+    const key = crypto.createHash('sha512').update(passphrase).update(saltBytes).digest();
+    const cipher = crypto.createCipheriv('aes-256-cbc', key.subarray(0, 32), key.subarray(32, 48));
+    const cipherText = Buffer.concat([cipher.update(Buffer.from(expected.master, 'hex')), cipher.final()]).toString('hex');
+    for (const roundsOption of [undefined, 0, 1]) {
+      const row = { salt: saltBytes, cipherText, rounds: roundsOption, derivationMethod: 'SHA512' };
+      assert.deepEqual(bitcoinCoreDecrypt([row], passphrase), { master: expected.master, jsonlDecrypted: [] });
+    }
+  });
+
   it('decrypts a master key and private key with the selected backend', function() {
     const derive = typeof native?.bitcoinCoreWalletKey === 'function'
       ? sandbox.spy(native, 'bitcoinCoreWalletKey')

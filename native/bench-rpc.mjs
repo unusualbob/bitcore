@@ -248,8 +248,12 @@ const tx = new BitcoreLib.Transaction().addOutput(new BitcoreLib.Transaction.Out
 const headerBytes = Buffer.alloc(80);
 
 if (testOnly) {
-  assert.equal(typeof addon?.cwcKeccak256Large, 'function');
-  console.log('Offline RPC compatibility and native dispatch checks passed.');
+  if (process.env.BITCORE_ECDSA_BACKEND === 'js') {
+    assert.ok(!addon, 'JavaScript reference run unexpectedly loaded an addon');
+  } else {
+    assert.equal(typeof addon?.cwcKeccak256Large, 'function');
+  }
+  console.log('Offline RPC compatibility checks passed.');
   process.exit(0);
 }
 

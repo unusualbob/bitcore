@@ -2,7 +2,8 @@
 /* eslint-disable no-bitwise -- Proof flags and compact targets are bit fields. */
 'use strict';
 
-process.env.BITCORE_ECDSA_BACKEND = 'native';
+// Importers also use the fixtures to exercise the JavaScript reference.
+if (require.main === module) process.env.BITCORE_ECDSA_BACKEND = 'native';
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');

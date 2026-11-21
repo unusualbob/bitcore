@@ -1,0 +1,20 @@
+{
+  "packages/bitcore-client/src/client.ts": [[52,54], [58,58]],
+  "packages/bitcore-client/src/encryption.ts": [[106,111], [124,130]],
+  "packages/bitcore-client/src/wallet.ts": [[940,946]],
+  "packages/bitcore-wallet-client/src/lib/key.ts": [[772,774]],
+  "packages/bitcore-tss/ecies/ecies.js": [[54,66], [70,76]],
+  "packages/crypto-rpc/lib/eth/EthRpc.js": [[38,38], [549,549]],
+  "packages/crypto-rpc/lib/xrp/XrpRpc.js": [[157,158]],
+  "packages/crypto-rpc/lib/xrp/wallet.js": [[7,7]],
+  "packages/crypto-wallet-core/src/base58.ts": [[10,10], [22,22]],
+  "packages/crypto-wallet-core/src/derivation/address-range.ts": [[56,62]],
+  "packages/crypto-wallet-core/src/derivation/eth/index.ts": [[28,30], [34,35]],
+  "packages/crypto-wallet-core/src/derivation/sol/index.ts": [[8,8], [68,73], [75,75]],
+  "packages/crypto-wallet-core/src/transactions/eth/index.ts": [[134,134], [173,185]],
+  "packages/crypto-wallet-core/src/transactions/sol/index.ts": [[220,223], [235,237]],
+  "packages/crypto-wallet-core/src/transactions/spl/associated-token.ts": [[16,16]],
+  "packages/crypto-wallet-core/src/transactions/xrp/index.ts": [[99,101], [119,124], [136,136], [138,138], [155,156]],
+  "packages/crypto-wallet-core/src/utils/evm-address.ts": [[15,15], [24,24]],
+  "packages/crypto-wallet-core/src/wallet-crypto.ts": [[32,32], [53,53], [63,63], [79,79]]
+}

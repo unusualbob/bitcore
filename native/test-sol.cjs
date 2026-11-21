@@ -9,6 +9,14 @@ async function sample() {
   const { SolDeriver } = require('../packages/crypto-wallet-core/ts_build/src/derivation/sol');
   const { BitcoreLib, Deriver, SolKit, SolanaProgram, Transactions } = require('../packages/crypto-wallet-core');
   const { native } = require('../packages/bitcore-lib/lib/crypto/ecdsa-native');
+  const { encodeBase58, decodeBase58 } = require('../packages/crypto-wallet-core/ts_build/src/base58');
+  for (const length of [0, 1, 31, 32, 64, 65, 89]) {
+    const bytes = Buffer.alloc(length, 0xab);
+    bytes.fill(0, 0, Math.min(3, length));
+    const encoded = SolKit.getBase58Decoder().decode(bytes);
+    assert.equal(encodeBase58(bytes), encoded);
+    assert.deepEqual(Buffer.from(decodeBase58(encoded)), bytes);
+  }
   const calls = new Map();
   const accelerated = ['slip10DeriveEd25519', 'ed25519PublicKey', 'ed25519Sign', 'solAssociatedTokenAddress'];
   if (typeof native?.ed25519SignLarge === 'function') accelerated.push('ed25519SignLarge');
@@ -90,17 +98,15 @@ async function sample() {
       results.push(ata);
     }
   }
-  if (native) {
-    for (const badAddress of ['1'.repeat(31), '1'.repeat(33), '0' + '1'.repeat(31)]) {
-      let expected;
-      assert.throws(() => SolKit.getAddressEncoder().encode(badAddress), error => {
-        expected = error;
-        return true;
-      });
-      await assert.rejects(Token.findAssociatedTokenPda({
-        owner: badAddress, mint: mint.address, tokenProgram: Token.TOKEN_PROGRAM_ADDRESS
-      }), { name: expected.name, message: expected.message });
-    }
+  for (const badAddress of ['1'.repeat(31), '1'.repeat(33), '0' + '1'.repeat(31)]) {
+    let expected;
+    assert.throws(() => SolKit.getAddressEncoder().encode(badAddress), error => {
+      expected = error;
+      return true;
+    });
+    await assert.rejects(Token.findAssociatedTokenPda({
+      owner: badAddress, mint: mint.address, tokenProgram: Token.TOKEN_PROGRAM_ADDRESS
+    }), { name: expected.name, message: expected.message });
   }
   const xZero = Buffer.alloc(32);
   xZero[0] = 1;
