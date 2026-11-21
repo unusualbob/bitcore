@@ -4,8 +4,8 @@ import util from 'util';
 import { xrpl } from '@bitpay-labs/crypto-wallet-core';
 import promptly from 'promptly';
 import { nativeCrypto } from '../native.js';
-import { walletFromSeed } from './wallet.js';
 import { XrpClientAdapter } from './XrpClientAdapter.js';
+import { walletFromSeed } from './wallet.js';
 
 const passwordPromptAsync = util.promisify(promptly.password);
 const MAX_NATIVE_ED25519_BYTES = 1232;
@@ -43,14 +43,18 @@ function trySignPayment(wallet, prepared) {
 
   const { privateKey, publicKey } = wallet;
   const ed25519 = /^ED[0-9a-f]{64}$/i.test(privateKey);
-  const sign = ed25519 ? nativeCrypto?.ed25519Sign : nativeCrypto?.cwcXrpSign;
-  if (typeof sign !== 'function' || (!ed25519 && !/^00[0-9a-f]{64}$/i.test(privateKey))) return;
+  const signInline = ed25519 ? nativeCrypto?.ed25519Sign : nativeCrypto?.cwcXrpSign;
+  if (typeof signInline !== 'function' || (!ed25519 && !/^00[0-9a-f]{64}$/i.test(privateKey))) return;
 
   const tx = Object.fromEntries(Object.entries(prepared).filter(([, value]) => value != null));
   xrpl.validate(tx);
   tx.SigningPubKey = publicKey;
   const message = Buffer.from(xrpl.encodeForSigning(tx), 'hex');
-  if (!message.length || message.length > (ed25519 ? MAX_NATIVE_ED25519_BYTES : MAX_NATIVE_XRP_BYTES)) return;
+  if (!message.length) return;
+  const maxInlineBytes = ed25519 ? MAX_NATIVE_ED25519_BYTES : MAX_NATIVE_XRP_BYTES;
+  const sign = message.length <= maxInlineBytes ? signInline :
+    (ed25519 ? nativeCrypto?.ed25519SignLarge : nativeCrypto?.cwcXrpSignLarge);
+  if (typeof sign !== 'function') return;
 
   const secretKey = Buffer.from(privateKey.slice(2), 'hex');
   try {

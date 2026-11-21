@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/base58",
     "crates/bch-schnorr",
     "crates/cwc-crypto",
     "crates/ecdsa",

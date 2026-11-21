@@ -4,6 +4,7 @@ const _ = require('lodash');
 const Address = require('../address');
 const BN = require('../crypto/bn');
 const Hash = require('../crypto/hash');
+const hash256 = require('../crypto/hash-native').createHash256(Hash);
 const Signature = require('../crypto/signature');
 const BufferReader = require('../encoding/bufferreader');
 const BufferWriter = require('../encoding/bufferwriter');
@@ -164,7 +165,7 @@ Object.defineProperty(Transaction.prototype, 'weight', {
  * @return {Buffer}
  */
 Transaction.prototype._getHash = function() {
-  return Hash.sha256sha256(this.toBuffer(true));
+  return hash256(this.toBuffer(true));
 };
 
 /**
@@ -1273,6 +1274,18 @@ const toBuffer = Transaction.prototype.toBuffer;
 const toBufferWriter = Transaction.prototype.toBufferWriter;
 const withSighashCache = createScope(Input, Output, Hash, tx =>
   Transaction.shallowCopy === shallowCopy && tx.toBuffer === toBuffer && tx.toBufferWriter === toBufferWriter);
+const sha256ripemd160 = Hash.sha256ripemd160;
+const signLegacy = Sighash.sign;
+const signWitness = SighashWitness.sign;
+const scriptToBuffer = Script.prototype.toBuffer;
+
+// Wallet-client uses this for freshly derived keys and a transaction it just built.
+Transaction.prototype._getWalletSignatures = function(keys, signingMethod) {
+  const collect = () => keys.map(key => this.getSignatures(key, undefined, signingMethod));
+  if (keys.length < 2 || this.getSignatures !== getSignatures || Hash.sha256ripemd160 !== sha256ripemd160 ||
+      Sighash.sign !== signLegacy || SighashWitness.sign !== signWitness || Script.prototype.toBuffer !== scriptToBuffer) return collect();
+  return withSighashCache(this, collect);
+};
 
 /**
  * Add a signature to the transaction

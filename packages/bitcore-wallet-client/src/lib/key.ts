@@ -769,7 +769,9 @@ export class Key {
         }
       };
 
-      let signatures = privs.map(priv => t.getSignatures(priv, undefined, txp.signingMethod));
+      let signatures = typeof t._getWalletSignatures === 'function'
+        ? t._getWalletSignatures(privs, txp.signingMethod, txp.addressType === Constants.SCRIPT_TYPES.P2TR)
+        : privs.map(priv => t.getSignatures(priv, undefined, txp.signingMethod));
       signatures = signatures.flat().sort((a, b) => a.inputIndex - b.inputIndex);
       // DEBUG
       // for (let sig of signatures) {

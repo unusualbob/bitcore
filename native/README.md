@@ -16,7 +16,7 @@ node native/test-parity.cjs
 node packages/bitcore-lib/benchmark/ecdsa.js
 ```
 
-For the full cross-chain checks, run `npm run test:crypto`. It tests the Rust workspace, builds the release addon, compiles the wallet TypeScript and runs the native parity suites. The root npm scripts `build:ecdsa`, `test:ecdsa`, and `bench:ecdsa` remain available for the original ECDSA workflow.
+For the full cross-chain checks, run `npm run test:crypto`. It tests the Rust workspace, builds the release addon, compiles the TypeScript packages used by the fixtures, and runs the parity suites through the library, RPC and wallet APIs. The root npm scripts `build:ecdsa`, `test:ecdsa`, and `bench:ecdsa` remain available for the original ECDSA workflow.
 
 Use `npm run test:hdkeys` to build and test public-key creation and HD derivation, and `npm run bench:hdkeys` to benchmark those public APIs. Both groups of operations share the addon and its backend selector.
 
@@ -102,11 +102,11 @@ After building the workspace's `@bitpay-labs/crypto-wallet-core` TypeScript outp
 | XRP | 544 → 5,992 | 11.0× | 133,890 → 126,031 |
 | Solana | 282 → 320 | 1.1× | 633,866 → 631,127 |
 
-The EVM deriver hashes the coordinates it has already parsed. XRP and Solana address-only encoding use their existing implementations. Solana uses Bitcore for extended-key import and ed25519-hd-key for child derivation.
+These measurements predate the native XRP and Solana providers. The [coverage report](COVERAGE.md) has the subsequent benchmarks for each provider.
 
 `bench:wallet-signing` signs complete transfers through ethers, xrpl, and the Solana SDK. `bench:tss` creates a three-party threshold key, signs with two parties, and checks both signers' result against the joint public key. Both benchmarks run the selected backend. For example, `BITCORE_ECDSA_BACKEND=js npm run bench:tss` and `BITCORE_ECDSA_BACKEND=native npm run bench:tss` measure the same session under each backend. TSS timings exclude network transport and include serialization and signature conversion.
 
-With both signing benchmark processes pinned to the same logical CPU, Ethereum signed 192 transfers/s under both settings, XRP signed 1,274/1,290 and Solana signed 8,901/9,103 (JS/native). Signed transaction bytes matched for every chain. These signing providers do their cryptography in their respective SDKs. Switching the Bitcore backend produced little difference in this workload.
+Before the account-chain signing changes, Ethereum signed 192 transfers/s under both settings, XRP signed 1,274/1,290 and Solana signed 8,901/9,103 (JS/native). Both benchmark processes ran on the same logical CPU, and signed transaction bytes matched for every chain.
 
 | TSS operation | JS total | Native total | Bitcore message encryption and authentication, JS → native | BitGo SDK round handlers, JS → native |
 | --- | ---: | ---: | ---: | ---: |
@@ -117,7 +117,7 @@ Figures are medians of five complete in-process sessions after one warmup. SDK r
 
 ### Rebuild scope
 
-The Cargo workspace has separate crates for ECDSA, HD derivation, Bitcoin Taproot, Bitcoin Cash Schnorr, KDFs, Merkle trees, ECIES, Ed25519, account-chain wallet operations and XRPL family seeds. A single Node adapter exposes them. Cargo rebuilds a changed crate and its dependents. For example, the wallet signing crate depends on ECDSA, while the Merkle, Ed25519 and KDF crates build independently of ECDSA. The final local XRPL derivation build compiled the XRPL key crate and the Node adapter in 0.61 s with dependencies cached.
+The Cargo workspace has separate crates for ECDSA, HD derivation, Bitcoin Taproot, Bitcoin Cash Schnorr, KDFs, Merkle trees, Base58, ECIES, Ed25519, account-chain wallet operations and XRPL family seeds. A single Node adapter exposes them. Cargo rebuilds a changed crate and its dependents. For example, changing the Base58 crate recompiles it and the Node adapter. The Merkle, Ed25519 and KDF crates build independently of ECDSA. The local XRPL derivation build compiled the XRPL key crate and the Node adapter in 0.61 s with dependencies cached.
 
 The following measurements are from the earlier five-component workspace. They used a fresh copy, cached dependency sources and one comment-only edit per component.
 
@@ -188,6 +188,6 @@ The table gives median rates on Linux x64 with Node 24.22.3 and an Intel Core Ul
 
 The EVM transaction providers share the EVM signing, hashing, and recovery implementation. This covers ETH, ARB, BASE, OP, MATIC, and ARC, their registered ERC-20 providers, and the ETH and MATIC multisig contracts. The providers still use ethers for transaction parsing and encoding and Web3 for contract ABI encoding. Canonical type 0, 1, and 2 transactions use one recovery when a submitted unsigned transaction matches the parsed unsigned bytes. Other recovery and transaction types use the ethers path. EVM address derivation uses Keccak-256 and EIP-55. The EVM, XRP, and legacy SOL message routes retain their existing Ethereum message prefix and count JavaScript string length before UTF-8 encoding.
 
-XRPL retains responsibility for transaction validation, binary encoding, address Base58Check encoding, and verification through the SDK. XRP payment, account-set, and account-delete signing can use native secp256k1 with low-S DER output or native Ed25519 over the original XRPL signing bytes. Ticket payments use the same signing path. Issued-currency payments, multisign handling, unusual key encodings, and larger signing preimages use the SDK. The native signing path accepts preimages through 4,096 bytes for XRP secp256k1 and through 1,232 bytes for XRP Ed25519. XRP transaction hashing retains the XRPL transaction ID prefix and uppercase SHA-512-half output.
+XRPL retains responsibility for transaction validation, binary encoding, address Base58Check encoding, and verification through the SDK. Unsigned transactions with canonical keys use native low-S DER secp256k1 or Ed25519 signatures over the XRPL signing bytes. This includes drops and issued-currency payments, ticket payments, trust sets, and offers. The full native signing call returns the signed blob without re-encoding it. Multisign handling, unusual key encodings, and payment amounts that still need XRPL normalization use the SDK. Separate optional exports handle signing preimages above 4,096 bytes for secp256k1 or 1,232 bytes for Ed25519. Older addons use the SDK above those sizes. XRP transaction hashing retains the XRPL transaction ID prefix and uppercase SHA-512-half output.
 
 `node native/test-cwc-ledgers.cjs` compares canonical serialized transactions, signatures, hashes, addresses, and errors with both backends after compiling crypto-wallet-core. It checks the XRPL SDK can verify both kinds of signature and confirms each native entry point runs. `node packages/crypto-wallet-core/benchmark/ledgers.js` runs five alternating rounds with 100 ms warmups and 300 ms samples.

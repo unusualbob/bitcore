@@ -169,6 +169,32 @@ pub fn derive_public(
     })
 }
 
+/// Writes consecutive, non-hardened child public keys as packed 33-byte SEC1 keys.
+/// A failed tweak leaves the result unusable, so callers can retry with the legacy path.
+pub fn derive_public_children(
+    public_key: &[u8; 33],
+    chain_code: &[u8; 32],
+    start: u32,
+    children: &mut [[u8; 33]],
+) -> Option<()> {
+    let count = u32::try_from(children.len()).ok()?;
+    if count == 0 || start.checked_add(count)? > HARDENED {
+        return None;
+    }
+    let parent = PublicKey::from_slice(public_key).ok()?;
+    let context = verification_context();
+    let mut hmac = Hmac::<Sha512>::new_from_slice(chain_code).ok()?;
+    hmac.update(public_key);
+    for (index, child) in (start..).zip(children) {
+        let mut mac = hmac.clone();
+        mac.update(&index.to_be_bytes());
+        let mut next_chain = [0; 32];
+        let tweak = split_digest(mac.finalize().into_bytes().as_ref(), &mut next_chain)?;
+        *child = parent.add_exp_tweak(context, &tweak.0).ok()?.serialize();
+    }
+    Some(())
+}
+
 fn derive_tweak(chain_code: &mut [u8; 32], key_data: &[u8], index: u32) -> Option<Tweak> {
     let mut mac = Hmac::<Sha512>::new_from_slice(chain_code).expect("valid HMAC key length");
     if index >= HARDENED {
@@ -262,6 +288,26 @@ mod tests {
             standard.chain_code,
             bytes("58b9edb7a0a938c112f137b0b08e55f3a79550c299a0ff8291f94464e4222ac9")
         );
+    }
+
+    #[test]
+    fn sibling_keys_match_scalar_derivation_at_range_boundaries() {
+        let parent = bytes("035a784662a4a20a65bf6aab9ae98a6c068a81c52e4b032c0fb5400c706cfccc56");
+        let chain = bytes("47fdacbd0f1097043b78c63c20c34ef4ed9a111d980047ad16282c7ae6236141");
+        let mut children = [[0; 33]; 256];
+        for start in [0, 500, HARDENED - 256] {
+            derive_public_children(&parent, &chain, start, &mut children).unwrap();
+            for (index, child) in (start..).zip(children) {
+                assert_eq!(
+                    child,
+                    derive_public(&parent, &chain, &[index]).unwrap().public_key
+                );
+            }
+        }
+        assert!(derive_public_children(&parent, &chain, HARDENED - 255, &mut children).is_none());
+        assert!(derive_public_children(&parent, &chain, u32::MAX, &mut children).is_none());
+        assert!(derive_public_children(&[0; 33], &chain, 0, &mut children).is_none());
+        assert!(derive_public_children(&parent, &chain, 0, &mut []).is_none());
     }
 
     #[test]

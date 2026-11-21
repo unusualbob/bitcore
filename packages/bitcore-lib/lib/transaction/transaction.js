@@ -4,6 +4,7 @@ const buffer = require('buffer');
 const Address = require('../address');
 const BN = require('../crypto/bn');
 const Hash = require('../crypto/hash');
+const hash256 = require('../crypto/hash-native').createHash256(Hash);
 const Signature = require('../crypto/signature');
 const BufferReader = require('../encoding/bufferreader');
 const BufferWriter = require('../encoding/bufferwriter');
@@ -16,11 +17,12 @@ const $ = require('../util/preconditions');
 const compare = Buffer.compare || require('buffer-compare');
 const Input = require('./input');
 const Output = require('./output');
-const { createScope } = require('./sighash-cache');
+const { createScope, hasSighashCache } = require('./sighash-cache');
 const Sighash = require('./sighash');
 const SighashSchnorr = require('./sighashschnorr');
 const SighashWitness = require('./sighashwitness');
 const UnspentOutput = require('./unspentoutput');
+const { getWalletTaprootSignatures } = require('./wallet-taproot');
 
 const objectToString = Object.prototype.toString;
 
@@ -167,7 +169,7 @@ Object.defineProperty(Transaction.prototype, 'weight', {
  * @return {Buffer}
  */
 Transaction.prototype._getHash = function() {
-  return Hash.sha256sha256(this.toBuffer(true));
+  return hash256(this.toBuffer(true));
 };
 
 /**
@@ -1305,6 +1307,23 @@ const toBuffer = Transaction.prototype.toBuffer;
 const toBufferWriter = Transaction.prototype.toBufferWriter;
 const withSighashCache = createScope(Input, Output, Hash, tx =>
   Transaction.shallowCopy === shallowCopy && tx.toBuffer === toBuffer && tx.toBufferWriter === toBufferWriter);
+const sha256ripemd160 = Hash.sha256ripemd160;
+const signLegacy = Sighash.sign;
+const signWitness = SighashWitness.sign;
+const scriptToBuffer = Script.prototype.toBuffer;
+
+// Wallet-client uses this for freshly derived keys and a transaction it just built.
+Transaction.prototype._getWalletSignatures = function(keys, signingMethod, taproot) {
+  const collect = () => keys.map(key => this.getSignatures(key, undefined, signingMethod));
+  if (keys.length < 2 || this.getSignatures !== getSignatures || Hash.sha256ripemd160 !== sha256ripemd160 ||
+      Sighash.sign !== signLegacy || SighashWitness.sign !== signWitness || Script.prototype.toBuffer !== scriptToBuffer) return collect();
+  if (!taproot) {
+    return this.inputs.some(input => input instanceof TaprootInput) ? collect() : withSighashCache(this, collect);
+  }
+  const matched = withSighashCache(this, () => hasSighashCache(this) &&
+    getWalletTaprootSignatures(this, keys, signingMethod));
+  return matched || collect();
+};
 
 /**
  * Add a signature to the transaction

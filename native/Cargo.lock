@@ -9,6 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+name = "bitcore-base58"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "bitcore-bch-schnorr"
 version = "0.1.0"
 dependencies = [
@@ -82,6 +90,7 @@ dependencies = [
 name = "bitcore-merkle"
 version = "0.1.0"
 dependencies = [
+ "ripemd",
  "sha2",
 ]
 
@@ -89,6 +98,7 @@ dependencies = [
 name = "bitcore-node-addon"
 version = "0.1.0"
 dependencies = [
+ "bitcore-base58",
  "bitcore-bch-schnorr",
  "bitcore-cwc-crypto",
  "bitcore-ecdsa",

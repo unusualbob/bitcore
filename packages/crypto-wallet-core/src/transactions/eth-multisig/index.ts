@@ -1,6 +1,7 @@
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { ETHTxProvider } from '../eth';
+import { createContractEncoder } from '../evm-contract';
 import { MultisigAbi } from './abi';
 
 export class ETHMULTISIGTxProvider extends ETHTxProvider {
@@ -35,17 +36,15 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
     const { addresses, requiredConfirmations, multisigGnosisContractAddress, dailyLimit } = params;
     const requiredConfirmationsStr = Number(requiredConfirmations).toLocaleString('en', { useGrouping: false });
     const dailyLimitStr = Number(dailyLimit).toLocaleString('en', { useGrouping: false });
-    const data = this.getMultisigContract(multisigGnosisContractAddress)
-      .methods.create(addresses, requiredConfirmationsStr, dailyLimitStr)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigGnosisContractAddress);
+    const data = encode('create', addresses, requiredConfirmationsStr, dailyLimitStr);
     return data;
   }
 
   addOwnerEncodeData(params: { newOwnerAddress: string; multisigContractAddress: string }) {
     const { multisigContractAddress, newOwnerAddress } = params;
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.addOwner(newOwnerAddress)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('addOwner', newOwnerAddress);
     return this.submitEncodeData({
       recipients: [
         {
@@ -60,9 +59,8 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
 
   removeOwnerEncodeData(params: { newOwnerAddress: string; multisigContractAddress: string }) {
     const { multisigContractAddress, newOwnerAddress } = params;
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.removeOwner(newOwnerAddress)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('removeOwner', newOwnerAddress);
     return this.submitEncodeData({
       recipients: [
         {
@@ -81,9 +79,8 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
     multisigContractAddress: string;
   }) {
     const { multisigContractAddress, newOwnerAddress, oldOwnerAddress } = params;
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.removeOwner(oldOwnerAddress, newOwnerAddress)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('removeOwner', oldOwnerAddress, newOwnerAddress);
     return this.submitEncodeData({
       recipients: [
         {
@@ -99,9 +96,8 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
   changeRequirementEncodedData(params: { requiredConfirmations: number; multisigContractAddress: string }) {
     const { requiredConfirmations, multisigContractAddress } = params;
     const requiredConfirmationsStr = Number(requiredConfirmations).toLocaleString('en', { useGrouping: false });
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.changeRequirement(requiredConfirmationsStr)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('changeRequirement', requiredConfirmationsStr);
     return this.submitEncodeData({
       recipients: [
         {
@@ -117,9 +113,8 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
   changeDailyLimitEncodedData(params: { requiredConfirmations: number; multisigContractAddress: string }) {
     const { requiredConfirmations, multisigContractAddress } = params;
     const requiredConfirmationsStr = Number(requiredConfirmations).toLocaleString('en', { useGrouping: false });
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.changeDailyLimit(requiredConfirmationsStr)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('changeDailyLimit', requiredConfirmationsStr);
     return this.submitEncodeData({
       recipients: [
         {
@@ -134,25 +129,22 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
 
   confirmTransactionEncodeData(params: { multisigContractAddress: string; transactionId: number }) {
     const { multisigContractAddress, transactionId } = params;
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.confirmTransaction(transactionId)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('confirmTransaction', transactionId);
     return data;
   }
 
   revokeConfirmationEncodeData(params: { multisigContractAddress: string; transactionId: number }) {
     const { multisigContractAddress, transactionId } = params;
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.revokeConfirmation(transactionId)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('revokeConfirmation', transactionId);
     return data;
   }
 
   executeTransactionEncodeData(params: { multisigContractAddress: string; transactionId: number }) {
     const { multisigContractAddress, transactionId } = params;
-    const data = this.getMultisigContract(multisigContractAddress)
-      .methods.executeTransaction(transactionId)
-      .encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    const data = encode('executeTransaction', transactionId);
     return data;
   }
 
@@ -166,7 +158,9 @@ export class ETHMULTISIGTxProvider extends ETHTxProvider {
     const { multisigContractAddress, data } = params;
     const [{ address, amount }] = params.recipients;
     const amountStr = Number(amount).toLocaleString('en', { useGrouping: false });
-    const contract = this.getMultisigContract(multisigContractAddress);
-    return contract.methods.submitTransaction(address, amountStr, data).encodeABI();
+    const encode = multisigEncoder(this, this.getMultisigContract, multisigContractAddress);
+    return encode('submitTransaction', address, amountStr, data);
   }
 }
+
+const multisigEncoder = createContractEncoder(MultisigAbi as AbiItem[], ETHMULTISIGTxProvider.prototype.getMultisigContract);

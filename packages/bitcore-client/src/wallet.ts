@@ -924,8 +924,20 @@ export class Wallet {
   }
 
   async syncAddresses(withChangeAddress = false) {
-    const addresses = new Array<string>();
-    if (this.addressIndex !== undefined) {
+    let addresses: string[] | undefined;
+    if (this.addressIndex > 1 && this.deriveAddress === deriveAddress &&
+        Deriver.deriveAddress === deriveSdkAddress && typeof this.chain === 'string') {
+      const start = this.addressZero ? 1 : 0;
+      addresses = Deriver.deriveAddressRange?.(
+        this.chain, this.network, this.xPubKey, start, this.addressIndex, withChangeAddress, this.addressType
+      );
+      if (addresses && start === 1) {
+        if (withChangeAddress) addresses.unshift(this.addressZero);
+        addresses.unshift(this.addressZero);
+      }
+    }
+    if (!addresses) {
+      addresses = [];
       for (let i = 0; i < this.addressIndex; i++) {
         addresses.push(this.deriveAddress(i, false));
         if (withChangeAddress) {
@@ -1166,6 +1178,9 @@ export class Wallet {
     return !!this.unlocked;
   }
 }
+
+const deriveAddress = Wallet.prototype.deriveAddress;
+const deriveSdkAddress = Deriver.deriveAddress;
 
 export const AddressTypes = {
   BTC: {

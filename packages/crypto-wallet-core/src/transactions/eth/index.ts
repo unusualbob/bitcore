@@ -2,13 +2,14 @@ import { ethers } from 'ethers';
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Constants } from '../../constants';
-import { nativeCrypto } from '../../native';
-import { evmHash, isCanonicalEvmSignature, recoverEvmAddress, signEvmDigest } from '../../wallet-crypto';
 import { 
   EVM_CHAIN_NETWORK_TO_CHAIN_ID as chainIds,
   EVM_CHAIN_DEFAULT_TESTNET as defaultTestnet 
 } from '../../constants/chains';
+import { nativeCrypto } from '../../native';
+import { evmHash, isCanonicalEvmSignature, recoverEvmAddress, signEvmDigest } from '../../wallet-crypto';
 import { MULTISENDAbi } from '../erc20/abi';
+import { createContractEncoder } from '../evm-contract';
 import type { Key } from '../../types/derivation';
 
 export class ETHTxProvider {
@@ -47,8 +48,8 @@ export class ETHTxProvider {
         amounts.push(BigInt(this._valueToString(recipient.amount)));
         amount += BigInt(this._valueToString(recipient.amount));
       }
-      const multisendContract = this.getMultiSendContract(contractAddress);
-      data = data || multisendContract.methods.sendEth(addresses, amounts).encodeABI();
+      const encode = prepareMultiSendCall(this, contractAddress);
+      data = data || encode('sendEth', addresses, amounts);
       to = contractAddress;
     } else {
       to = recipients[0].address;
@@ -204,4 +205,10 @@ export class ETHTxProvider {
     const { tx } = params;
     return evmHash(tx).slice(2); // remove 0x prefix
   }
+}
+
+const multiSendEncoder = createContractEncoder(MULTISENDAbi as AbiItem[], ETHTxProvider.prototype.getMultiSendContract);
+
+export function prepareMultiSendCall(provider: ETHTxProvider, address: string) {
+  return multiSendEncoder(provider, provider.getMultiSendContract, address);
 }

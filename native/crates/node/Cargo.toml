@@ -9,6 +9,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+bitcore-base58 = { path = "../base58" }
 bitcore-bch-schnorr = { path = "../bch-schnorr" }
 bitcore-cwc-crypto = { path = "../cwc-crypto" }
 bitcore-ecdsa = { path = "../ecdsa" }

@@ -2,10 +2,11 @@
 
 var _ = require('lodash');
 var BN = require('../crypto/bn');
-var BufferUtil = require('../util/buffer');
+var Hash = require('../crypto/hash');
+const hash256 = require('../crypto/hash-native').createHash256(Hash);
 var BufferReader = require('../encoding/bufferreader');
 var BufferWriter = require('../encoding/bufferwriter');
-var Hash = require('../crypto/hash');
+var BufferUtil = require('../util/buffer');
 var JSUtil = require('../util/js');
 var $ = require('../util/preconditions');
 
@@ -233,7 +234,7 @@ BlockHeader.prototype.getDifficulty = function getDifficulty() {
  */
 BlockHeader.prototype._getHash = function hash() {
   var buf = this.toBuffer();
-  return Hash.sha256sha256(buf);
+  return hash256(buf);
 };
 
 var idProperty = {

@@ -1,6 +1,7 @@
 'use strict';
 
 const nodeCrypto = require('crypto');
+const { types } = require('util');
 const BN = require('../crypto/bn');
 const Hash = require('../crypto/hash');
 const { native } = require('../crypto/ecdsa-native');
@@ -194,32 +195,32 @@ Block.prototype.getTransactionHashes = function getTransactionHashes() {
   return hashes;
 };
 
-/**
- * Will build a merkle tree of all the transactions, ultimately arriving at
- * a single point, the merkle root.
- * @link https://en.bitcoin.it/wiki/Protocol_specification#Merkle_Trees
- * @returns {Array} - An array with each level of the tree after the other.
- */
-Block.prototype.getMerkleTree = function getMerkleTree() {
+const getTransactionHashes = Block.prototype.getTransactionHashes;
 
-  const tree = this.getTransactionHashes();
-  const count = this.transactions.length;
-  if (typeof native?.merkleParents === 'function' && count >= 8 && count <= 65536 &&
+function buildMerkleTree(block, rootOnly) {
+
+  const tree = block.getTransactionHashes();
+  const count = block.transactions.length;
+  const rootBatch = rootOnly && native?.merkleRoot;
+  const batch = typeof rootBatch === 'function' ? rootBatch : native?.merkleParents;
+  if (typeof batch === 'function' && count >= 8 && count <= 65536 &&
       Array.isArray(tree) && tree.length === count && tree.push === Array.prototype.push &&
       tree.every === Array.prototype.every &&
       Hash.sha256sha256 === doubleSha256 && Hash.sha256 === sha256 && !nodeCrypto.getFips?.() &&
       tree.every(hash => Buffer.isBuffer(hash) && hash.length === 32)) {
-    const parents = native.merkleParents(Buffer.concat(tree), count);
+    const leaves = Buffer.concat(tree);
+    if (batch === rootBatch) return batch(leaves);
+    const parents = batch(leaves, count);
     for (let offset = 0; offset < parents.length; offset += 32) {
       const parent = Buffer.allocUnsafeSlow(32);
       parents.copy(parent, 0, offset, offset + 32);
       tree.push(parent);
     }
-    return tree;
+    return rootOnly ? tree[tree.length - 1] : tree;
   }
 
   let j = 0;
-  for (let size = this.transactions.length; size > 1; size = Math.floor((size + 1) / 2)) {
+  for (let size = block.transactions.length; size > 1; size = Math.floor((size + 1) / 2)) {
     for (let i = 0; i < size; i += 2) {
       const i2 = Math.min(i + 1, size - 1);
       const buf = Buffer.concat([tree[j + i], tree[j + i2]]);
@@ -228,7 +229,17 @@ Block.prototype.getMerkleTree = function getMerkleTree() {
     j += size;
   }
 
-  return tree;
+  return rootOnly ? tree[tree.length - 1] : tree;
+}
+
+/**
+ * Will build a merkle tree of all the transactions, ultimately arriving at
+ * a single point, the merkle root.
+ * @link https://en.bitcoin.it/wiki/Protocol_specification#Merkle_Trees
+ * @returns {Array} - An array with each level of the tree after the other.
+ */
+const getMerkleTree = Block.prototype.getMerkleTree = function getMerkleTree() {
+  return buildMerkleTree(this, false);
 };
 
 /**
@@ -236,6 +247,13 @@ Block.prototype.getMerkleTree = function getMerkleTree() {
  * @returns {Buffer} - A buffer of the merkle root hash
  */
 Block.prototype.getMerkleRoot = function getMerkleRoot() {
+  if (typeof native?.merkleRoot === 'function' && types?.isProxy && !types.isProxy(this) &&
+      Object.getPrototypeOf(this) === Block.prototype &&
+      !Object.hasOwn(this, 'getMerkleTree') && !Object.hasOwn(this, 'getTransactionHashes') &&
+      Object.getOwnPropertyDescriptor(Block.prototype, 'getMerkleTree')?.value === getMerkleTree &&
+      Object.getOwnPropertyDescriptor(Block.prototype, 'getTransactionHashes')?.value === getTransactionHashes) {
+    return buildMerkleTree(this, true);
+  }
   const tree = this.getMerkleTree();
   return tree[tree.length - 1];
 };

@@ -3,8 +3,13 @@
 var nodeCrypto = require('crypto');
 var BufferUtil = require('../util/buffer');
 var $ = require('../util/preconditions');
+const { native } = require('./ecdsa-native');
+const { canHashNatively } = require('./hash-native');
 
 var Hash = module.exports;
+// Short address and redeem-script digests benefit from one native call.
+const MAX_NATIVE_HASH160_BYTES = 128;
+
 const hasFipsCheck = typeof nodeCrypto.getFips === 'function';
 const hasOneShotHash = hasFipsCheck && typeof nodeCrypto.hash === 'function';
 
@@ -37,6 +42,10 @@ Hash.ripemd160 = function(buf) {
 
 Hash.sha256ripemd160 = function(buf) {
   $.checkArgument(BufferUtil.isBuffer(buf));
+  if (typeof native?.hash160 === 'function' && Hash.sha256 === sha256 && Hash.ripemd160 === ripemd160 &&
+      canHashNatively(buf, MAX_NATIVE_HASH160_BYTES, 'ripemd160')) {
+    return native.hash160(buf);
+  }
   return Hash.ripemd160(Hash.sha256(buf));
 };
 
@@ -48,6 +57,7 @@ Hash.sha512 = function(buf) {
 Hash.sha512.blocksize = 1024;
 
 const sha256 = Hash.sha256;
+const ripemd160 = Hash.ripemd160;
 const sha512 = Hash.sha512;
 // Browser crypto shims use the existing HMAC implementation.
 const hasNativeHmac = hasFipsCheck && typeof nodeCrypto.createHmac === 'function';

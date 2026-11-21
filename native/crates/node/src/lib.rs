@@ -3,10 +3,12 @@ use std::panic::catch_unwind;
 use std::ptr::null_mut;
 use std::sync::atomic::{Ordering, compiler_fence};
 
+mod base58;
 mod bch_schnorr;
 mod cwc_crypto;
 mod ecies;
 mod ed25519;
+mod hd_children;
 mod kdfs;
 mod merkle;
 mod points;
@@ -132,7 +134,9 @@ fn arguments<const N: usize>(env: Env, info: CallbackInfo) -> Result<[Value; N]>
     Ok(arguments)
 }
 
-fn copy_buffer(env: Env, value: Value, output: &mut [u8]) -> Result<usize> {
+// The returned pointer is valid only while the callback holds the typed array
+// and before any operation which can reenter JavaScript or detach its storage.
+fn byte_view(env: Env, value: Value) -> Result<(*const u8, usize)> {
     let mut array_type = 0;
     let mut length = 0;
     let mut data = null_mut();
@@ -159,13 +163,26 @@ fn copy_buffer(env: Env, value: Value, output: &mut [u8]) -> Result<usize> {
         if !is_array_buffer || array_type != NAPI_UINT8_ARRAY || data.is_null() {
             return Err(message);
         }
-        if length > output.len() {
-            return Err(c"Incorrect native ECDSA buffer length");
-        }
-        // The callback keeps the typed array alive. The backing store is unshared,
-        // and the Node-API calls above do not execute JavaScript that could detach it.
-        std::ptr::copy_nonoverlapping(data.cast::<u8>(), output.as_mut_ptr(), length);
+        Ok((data.cast(), length))
     }
+}
+
+// `read` must finish consuming the unshared bytes before making any call that
+// can reenter JavaScript. Copy outputs into Node only after this function returns.
+fn with_byte_view<T>(env: Env, value: Value, read: impl FnOnce(&[u8]) -> T) -> Result<T> {
+    let (data, length) = byte_view(env, value)?;
+    if length > isize::MAX as usize {
+        return Err(c"Input exceeds addressable memory");
+    }
+    Ok(read(unsafe { std::slice::from_raw_parts(data, length) }))
+}
+
+fn copy_buffer(env: Env, value: Value, output: &mut [u8]) -> Result<usize> {
+    let (data, length) = byte_view(env, value)?;
+    if length > output.len() {
+        return Err(c"Incorrect native ECDSA buffer length");
+    }
+    unsafe { std::ptr::copy_nonoverlapping(data, output.as_mut_ptr(), length) };
     Ok(length)
 }
 
@@ -387,12 +404,14 @@ pub unsafe extern "C" fn napi_register_module_v1(env: Env, exports: Value) -> Va
             (c"publicKeyCreate", public_key_create),
             (c"derivePrivatePath", derive_private_path),
             (c"derivePublicPath", derive_public_path),
+            (c"derivePublicChildren", hd_children::derive_public_children),
             (c"publicKeyParse", points::parse),
             (c"eciesKeyMaterial", ecies::key_material),
             (c"signBchSchnorr", bch_schnorr::sign),
             (c"verifyBchSchnorr", bch_schnorr::verify),
         ]
         .into_iter()
+        .chain(base58::FUNCTIONS)
         .chain(cwc_crypto::FUNCTIONS)
         .chain(ed25519::FUNCTIONS)
         .chain(kdfs::FUNCTIONS)

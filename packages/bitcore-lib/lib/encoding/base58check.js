@@ -1,7 +1,15 @@
 'use strict';
 
-const sha256sha256 = require('../crypto/hash').sha256sha256;
+const { getFips } = require('crypto');
+const { native } = require('../crypto/ecdsa-native');
+const Hash = require('../crypto/hash');
 const Base58 = require('./base58');
+
+const nativeEncode = native?.base58CheckEncode;
+const nativeDecode = native?.base58DecodeChecked;
+const { sha256, sha256sha256 } = Hash;
+const encodeBase58 = Base58.encode;
+const decodeBase58 = Base58.decode;
 
 function checksum(data) {
   return sha256sha256(data).slice(0, 4);
@@ -44,6 +52,12 @@ Base58Check.decode = function(s) {
   if (typeof s !== 'string')
     throw new Error('Input must be a string');
 
+  if (nativeDecode && s.length >= 24 && s.length <= 177 &&
+      Base58.decode === decodeBase58 && Hash.sha256 === sha256 && !getFips?.()) {
+    const decoded = nativeDecode(s);
+    if (decoded !== null) return decoded.slice(0, -4);
+  }
+
   const buf = Base58.decode(s);
 
   if (buf.length < 4)
@@ -65,6 +79,12 @@ Base58Check.checksum = checksum;
 Base58Check.encode = function(buf) {
   if (!Buffer.isBuffer(buf))
     throw new Error('Input must be a buffer');
+  if (nativeEncode && buf.length >= 20 && buf.length <= 124 &&
+      Base58.encode === encodeBase58 && Base58Check.checksum === checksum &&
+      Hash.sha256 === sha256 && buf.copy === Buffer.prototype.copy && !getFips?.()) {
+    const encoded = nativeEncode(buf);
+    if (encoded !== null) return encoded;
+  }
   const checkedBuf = Buffer.alloc(buf.length + 4);
   const hash = Base58Check.checksum(buf);
   buf.copy(checkedBuf);

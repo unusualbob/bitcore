@@ -1,5 +1,10 @@
 'use strict';
 
+const { native } = require('../crypto/ecdsa-native');
+
+const nativeEncode = native?.base58Encode;
+const nativeDecode = native?.base58Decode;
+
 const CHARACTERS = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const ALPHABET = new Set(CHARACTERS);
 const DIGITS = new Int8Array(128).fill(-1);
@@ -62,6 +67,10 @@ Base58.encode = function(buf) {
   }
   let offset = 0;
   while (offset < buf.length && buf[offset] === 0) offset++;
+  if (nativeEncode && buf.length - offset >= 20 && buf.length <= 128) {
+    const encoded = nativeEncode(buf);
+    if (encoded !== null) return encoded;
+  }
   let result = '1'.repeat(offset);
   const limbs = [];
   while (offset < buf.length) {
@@ -100,6 +109,11 @@ Base58.decode = function(str) {
   const zeroes = offset;
   if (offset === str.length) return Buffer.alloc(zeroes);
 
+  // JavaScript is competitive for short strings, where Buffer allocation dominates.
+  if (nativeDecode && str.length - zeroes >= 48 && str.length <= 177) {
+    const decoded = nativeDecode(str);
+    if (decoded !== null) return decoded;
+  }
   const limbs = [];
   while (offset < str.length) {
     const end = Math.min(offset + 4, str.length);

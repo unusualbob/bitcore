@@ -12,6 +12,7 @@ import logger from '../logger';
 import { Address } from './address';
 import { AddressManager, IAddressManager } from './addressmanager';
 import { Copayer, ICopayer } from './copayer';
+import type { DeriveAddressPublicKey } from './address';
 
 const $ = singleton();
 const { Constants, Defaults, Utils } = Common;
@@ -339,12 +340,12 @@ export class Wallet implements IWallet<() => boolean> {
   }
 
   // Only for power scan
-  getSkippedAddress() {
+  getSkippedAddress(derivePublicKey: DeriveAddressPublicKey = undefined) {
     $.checkState(this.isComplete(), 'Failed state: this.isComplete() at <getSkipeedAddress()>');
 
     const next = this.addressManager.getNextSkippedPath();
     if (!next) return;
-    const address = Address.derive(
+    const args: Parameters<typeof Address.derive> = [
       this.id,
       this.addressType,
       this.publicKeyRing,
@@ -354,7 +355,20 @@ export class Wallet implements IWallet<() => boolean> {
       this.network,
       next.isChange,
       this.chain
-    );
-    return address;
+    ];
+    if (derivePublicKey && Address.derive === deriveAddress) {
+      args.push(false, undefined, undefined, undefined, derivePublicKey);
+    }
+    return Address.derive(...args);
+  }
+
+  static createSkippedAddressReader(wallet: Wallet) {
+    const derivePublicKey = wallet.getSkippedAddress === getSkippedAddress && Address.createScanPublicKeyDeriver(wallet.chain);
+    return () => derivePublicKey && wallet.getSkippedAddress === getSkippedAddress
+      ? wallet.getSkippedAddress(derivePublicKey)
+      : wallet.getSkippedAddress();
   }
 }
+
+const getSkippedAddress = Wallet.prototype.getSkippedAddress;
+const deriveAddress = Address.derive;

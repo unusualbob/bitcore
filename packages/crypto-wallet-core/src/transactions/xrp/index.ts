@@ -91,8 +91,7 @@ export class XRPTxProvider {
 
   getSignature(params: { tx: string; key: Key }): string {
     const { tx, key } = params;
-    if ((typeof nativeCrypto?.cwcXrpSign === 'function' || typeof nativeCrypto?.ed25519Sign === 'function') &&
-        this.getSignatureObject === getSignatureObject) {
+    if (hasNativeXrpSigner() && this.getSignatureObject === getSignatureObject) {
       const result = this.signTransaction(tx, key);
       if (result.signature) return result.signature;
       return (xrpl.decode(result.signedTransaction) as unknown as xrpl.Transaction).TxnSignature;
@@ -127,7 +126,15 @@ export class XRPTxProvider {
 
   sign(params: { tx: string; key: Key }): string {
     const { tx, key } = params;
-    const signature = this.getSignature({ tx, key });
+    let signature: string;
+    if (hasNativeXrpSigner() && this.getSignature === getSignature &&
+        this.getSignatureObject === getSignatureObject && this.applySignature === applySignature) {
+      const result = this.signTransaction(tx, key);
+      if (result.signature) return result.signedTransaction;
+      signature = (xrpl.decode(result.signedTransaction) as unknown as xrpl.Transaction).TxnSignature;
+    } else {
+      signature = this.getSignature({ tx, key });
+    }
     return this.applySignature({ tx, signature, pubKey: key.pubKey });
   }
 
@@ -185,16 +192,23 @@ export class XRPTxProvider {
 }
 
 const getSignatureObject = XRPTxProvider.prototype.getSignatureObject;
+const getSignature = XRPTxProvider.prototype.getSignature;
+const applySignature = XRPTxProvider.prototype.applySignature;
+
+function hasNativeXrpSigner() {
+  return typeof nativeCrypto?.cwcXrpSign === 'function' || typeof nativeCrypto?.ed25519Sign === 'function';
+}
 
 function canSignXrp(transaction: xrpl.Transaction, key: Key) {
-  // Wallet.sign normalizes issued amounts and rejects preexisting signatures.
-  // Other transaction types and key encodings remain with the vendor path.
-  return !transaction.TxnSignature && !('Signers' in transaction) &&
-    (transaction.TransactionType === 'AccountSet' || transaction.TransactionType === 'AccountDelete' ||
-      (transaction.TransactionType === 'Payment' && typeof transaction.Amount === 'string')) &&
-    !Object.values(transaction).some(value => value == null) &&
-    typeof key?.pubKey === 'string' && /^(?:02|03|ed)[0-9a-f]{64}$/i.test(key.pubKey) &&
-    supportsXrpSigning(key.privKey);
+  if (transaction.TxnSignature || 'Signers' in transaction || Object.values(transaction).some(value => value == null) ||
+      typeof key?.pubKey !== 'string' || !/^(?:02|03|ed)[0-9a-f]{64}$/i.test(key.pubKey) ||
+      !supportsXrpSigning(key.privKey)) return false;
+
+  // Decoding canonicalizes issued values. Keep Wallet.sign for any Payment that
+  // still needs its trailing-zero normalization or is missing a valid Amount.
+  if (transaction.TransactionType !== 'Payment' || typeof transaction.Amount === 'string') return true;
+  const value = transaction.Amount?.value;
+  return typeof value === 'string' && !(value.includes('.') && value.endsWith('0'));
 }
 
 function hashSignedTransaction(transaction: string) {

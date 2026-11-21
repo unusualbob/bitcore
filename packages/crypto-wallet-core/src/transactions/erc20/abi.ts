@@ -1,3 +1,6 @@
+import { registerContractAbi } from '../evm-contract';
+import type { AbiItem } from 'web3-utils';
+
 export { ERC20Abi, MULTISENDAbi };
 
 const ERC20Abi = [
@@ -416,3 +419,6 @@ const MULTISENDAbi = [
     type: 'function'
   }
 ];
+
+registerContractAbi(ERC20Abi as AbiItem[]);
+registerContractAbi(MULTISENDAbi as AbiItem[]);

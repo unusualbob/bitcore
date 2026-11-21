@@ -1,5 +1,8 @@
 'use strict';
 
+const nodeCrypto = require('crypto');
+const { types } = require('util');
+const { native } = require('../crypto/ecdsa-native');
 const Hash = require('../crypto/hash');
 const BufferReader = require('../encoding/bufferreader');
 const BufferWriter = require('../encoding/bufferwriter');
@@ -140,6 +143,9 @@ MerkleBlock.prototype.validMerkleTree = function validMerkleTree() {
     return false;
   }
 
+  const nativeRoot = partialMerkle(this, true);
+  if (nativeRoot) return BufferUtil.equals(nativeRoot, this.header.merkleRoot);
+
   const height = this._calcTreeHeight();
   const opts = { hashesUsed: 0, flagBitsUsed: 0 };
   const root = this._traverseMerkleTree(height, 0, opts);
@@ -171,6 +177,9 @@ MerkleBlock.prototype.filterdTxsHash = function filterdTxsHash() {
   if (this.hashes.length === 1) {
     return [];
   };
+
+  const matches = partialMerkle(this, false);
+  if (matches) return matches;
 
   const height = this._calcTreeHeight();
   const opts = { hashesUsed: 0, flagBitsUsed: 0 };
@@ -273,6 +282,9 @@ MerkleBlock.prototype.hasTransaction = function hasTransaction(tx) {
     hash = BufferUtil.reverse(Buffer.from(tx.id, 'hex')).toString('hex');
   }
 
+  const matches = partialMerkle(this, false);
+  if (matches) return matches.indexOf(hash) !== -1;
+
   const txs = [];
   const height = this._calcTreeHeight();
   this._traverseMerkleTree(height, 0, { txs: txs });
@@ -309,5 +321,53 @@ MerkleBlock._fromBufferReader = function _fromBufferReader(br) {
 MerkleBlock.fromObject = function fromObject(obj) {
   return new MerkleBlock(obj);
 };
+
+const { sha256, sha256sha256 } = Hash;
+const { _calcTreeHeight, _calcTreeWidth, _traverseMerkleTree } = MerkleBlock.prototype;
+const hashHex = /^[0-9a-fA-F]{64}$/;
+
+function partialMerkle(block, digest) {
+  if (typeof native?.partialMerkle !== 'function' || !types?.isProxy || types.isProxy(block) ||
+      Hash.sha256 !== sha256 || Hash.sha256sha256 !== sha256sha256 || nodeCrypto.getFips?.() ||
+      Object.getPrototypeOf(block) !== MerkleBlock.prototype ||
+      Object.hasOwn(block, '_calcTreeHeight') || Object.hasOwn(block, '_calcTreeWidth') ||
+      Object.hasOwn(block, '_traverseMerkleTree') ||
+      Object.getOwnPropertyDescriptor(MerkleBlock.prototype, '_calcTreeHeight')?.value !== _calcTreeHeight ||
+      Object.getOwnPropertyDescriptor(MerkleBlock.prototype, '_calcTreeWidth')?.value !== _calcTreeWidth ||
+      Object.getOwnPropertyDescriptor(MerkleBlock.prototype, '_traverseMerkleTree')?.value !== _traverseMerkleTree) {
+    return;
+  }
+
+  // Preserve the traversal of sparse arrays, accessors, and noncanonical proofs.
+  const count = Object.getOwnPropertyDescriptor(block, 'numTransactions')?.value;
+  const hashes = Object.getOwnPropertyDescriptor(block, 'hashes')?.value;
+  const flags = Object.getOwnPropertyDescriptor(block, 'flags')?.value;
+  if (!Number.isInteger(count) || count < 1 || count > 0x40000000 ||
+      !Array.isArray(hashes) || types.isProxy(hashes) || hashes.length < 8 || hashes.length > 65536 ||
+      hashes.length > count || !Array.isArray(flags) || types.isProxy(flags) ||
+      flags.length > 65536 || flags.length * 8 < hashes.length) {
+    return;
+  }
+
+  const packedFlags = Buffer.allocUnsafe(flags.length);
+  for (let i = 0; i < flags.length; i++) {
+    const flag = Object.getOwnPropertyDescriptor(flags, i)?.value;
+    if (!Number.isInteger(flag) || flag < 0 || flag > 255) return;
+    packedFlags[i] = flag;
+  }
+  const hex = new Array(hashes.length);
+  for (let i = 0; i < hashes.length; i++) {
+    const hash = Object.getOwnPropertyDescriptor(hashes, i)?.value;
+    if (typeof hash !== 'string' || hash.length !== 64 || !hashHex.test(hash)) return;
+    hex[i] = hash;
+  }
+  const result = native.partialMerkle(Buffer.from(hex.join(''), 'hex'), packedFlags, count, digest);
+  if (!result || digest) return result;
+  const matches = [];
+  for (let offset = 0; offset < result.length; offset += 4) {
+    matches.push(hex[result.readUInt32LE(offset)]);
+  }
+  return matches;
+}
 
 module.exports = MerkleBlock;

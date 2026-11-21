@@ -1,6 +1,7 @@
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
-import { ETHTxProvider } from '../eth';
+import { ETHTxProvider, prepareMultiSendCall } from '../eth';
+import { createContractEncoder } from '../evm-contract';
 import { ERC20Abi } from './abi';
 
 export class ERC20TxProvider extends ETHTxProvider {
@@ -43,15 +44,14 @@ export class ERC20TxProvider extends ETHTxProvider {
         addresses.push(recipient.address);
         amounts.push(BigInt(recipient.amount));
       }
-      const multisendContract = this.getMultiSendContract(contractAddress);
-      return multisendContract.methods.sendErc20(tokenAddress, addresses, amounts).encodeABI();
+      return prepareMultiSendCall(this, contractAddress)('sendErc20', tokenAddress, addresses, amounts);
     } else {
       const [{ address, amount }] = params.recipients;
       const amountBI = BigInt(amount);
-      const data = this.getERC20Contract(tokenAddress)
-        .methods.transfer(address, amountBI)
-        .encodeABI();
-      return data;
+      const encode = erc20Encoder(this, this.getERC20Contract, tokenAddress);
+      return encode('transfer', address, amountBI);
     }
   }
 }
+
+const erc20Encoder = createContractEncoder(ERC20Abi as AbiItem[], ERC20TxProvider.prototype.getERC20Contract);

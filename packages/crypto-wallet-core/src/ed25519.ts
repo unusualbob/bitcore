@@ -1,8 +1,7 @@
 import { nativeCrypto } from './native';
 
-// A Solana transaction cannot exceed the network packet size. Larger messages
-// can still use Solana Kit's existing signer.
-const MAX_MESSAGE_BYTES = 1232;
+// The original binding copies messages up to the Solana network packet size.
+const MAX_INLINE_MESSAGE_BYTES = 1232;
 const MAX_PATH_DEPTH = 255;
 
 function readResult(result: unknown, bytes: number): Buffer {
@@ -33,8 +32,10 @@ export function nativeSlip10Path(key: Buffer, chainCode: Buffer, indexes: number
 }
 
 export function nativeEd25519Sign(seed: unknown, message: unknown) {
-  if (typeof nativeCrypto?.ed25519Sign !== 'function' || !fixedSeed(seed) || !(message instanceof Uint8Array) ||
-      message.length === 0 || message.length > MAX_MESSAGE_BYTES || !(message.buffer instanceof ArrayBuffer)) return;
-  const signed = readResult(nativeCrypto.ed25519Sign(seed, message), 96);
+  if (!fixedSeed(seed) || !(message instanceof Uint8Array) ||
+      message.length === 0 || !(message.buffer instanceof ArrayBuffer)) return;
+  const sign = message.length <= MAX_INLINE_MESSAGE_BYTES ? nativeCrypto?.ed25519Sign : nativeCrypto?.ed25519SignLarge;
+  if (typeof sign !== 'function') return;
+  const signed = readResult(sign(seed, message), 96);
   return { publicKey: signed.subarray(0, 32), signature: signed.subarray(32) };
 }

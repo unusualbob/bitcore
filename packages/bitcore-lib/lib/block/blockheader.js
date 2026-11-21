@@ -2,6 +2,7 @@
 
 const BN = require('../crypto/bn');
 const Hash = require('../crypto/hash');
+const hash256 = require('../crypto/hash-native').createHash256(Hash);
 const BufferReader = require('../encoding/bufferreader');
 const BufferWriter = require('../encoding/bufferwriter');
 const BufferUtil = require('../util/buffer');
@@ -233,7 +234,7 @@ BlockHeader.prototype.getDifficulty = function getDifficulty() {
  */
 BlockHeader.prototype._getHash = function hash() {
   const buf = this.toBuffer();
-  return Hash.sha256sha256(buf);
+  return hash256(buf);
 };
 
 const idProperty = {

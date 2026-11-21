@@ -1,7 +1,8 @@
+import { deriveAddressRange } from './address-range';
 import { ArbDeriver } from './arb';
 import { BaseDeriver } from './base';
 import { BchDeriver } from './bch';
-import { BtcDeriver } from './btc';
+import { AbstractBitcoreLibDeriver, BtcDeriver } from './btc';
 import { DogeDeriver } from './doge';
 import { EthDeriver } from './eth';
 import { LtcDeriver } from './ltc';
@@ -26,6 +27,18 @@ const derivers: { [chain: string]: IDeriver } = {
   ARC: new EthDeriver(),
   SOL: new SolDeriver()
 };
+const rangeDerivers = new Map(
+  ['BTC', 'BCH', 'DOGE', 'LTC', 'ETH', 'MATIC', 'ARB', 'BASE', 'OP', 'ARC', 'XRP'].map(chain => {
+    const deriver = derivers[chain];
+    return [chain, {
+      deriver,
+      deriveAddress: deriver.deriveAddress,
+      deriveAddressWithPath: deriver.deriveAddressWithPath,
+      getAddress: deriver.getAddress,
+      bitcoreLib: deriver instanceof AbstractBitcoreLibDeriver ? deriver.bitcoreLib : undefined
+    }];
+  })
+);
 
 export class DeriverProxy {
   private get(chain) {
@@ -46,6 +59,25 @@ export class DeriverProxy {
   deriveAddress(chain, network, xpubKey, addressIndex, isChange, addressType?) {
     return this.get(chain).deriveAddress(network, xpubKey, addressIndex, isChange, addressType);
   }
+
+  /**
+   * Returns receive addresses, interleaved with change addresses when requested.
+   * Unsupported chains, custom derivers and exceptional inputs defer to the scalar entry point.
+   */
+  deriveAddressRange(chain: string, network: string, xpubKey: string, start: number, end: number, withChange: boolean, addressType?: string): string[] | undefined {
+    if (this.deriveAddress !== DeriverProxy.#scalarDeriveAddress || this.get !== DeriverProxy.#getDeriver) return;
+    const normalizedChain = chain.toUpperCase();
+    const builtin = rangeDerivers.get(normalizedChain);
+    if (!builtin) return;
+    const deriver = this.get(normalizedChain);
+    if (deriver !== builtin.deriver || deriver.deriveAddress !== builtin.deriveAddress ||
+        deriver.deriveAddressWithPath !== builtin.deriveAddressWithPath || deriver.getAddress !== builtin.getAddress) return;
+    if (deriver instanceof AbstractBitcoreLibDeriver && deriver.bitcoreLib !== builtin.bitcoreLib) return;
+    return deriveAddressRange(normalizedChain, deriver, network, xpubKey, start, end, withChange, addressType);
+  }
+
+  static #scalarDeriveAddress = DeriverProxy.prototype.deriveAddress;
+  static #getDeriver = DeriverProxy.prototype.get;
 
   /**
    * This derives keys/addresses using the conventional paths.

@@ -65,15 +65,19 @@ function isCoordinate(value, context) {
   return value.cmp(fieldSize) < 0;
 }
 
+function parsePointX(odd, x) {
+  const sec = x.toArrayLike(Buffer, 'be', 33);
+  sec[0] = odd ? 3 : 2;
+  return native.publicKeyParse(sec);
+}
+
 function pointFromX(odd, x) {
   if (typeof native?.publicKeyParse === 'function' && typeof odd === 'boolean' && hasStandardCurve()) {
     // Preserve bn.js's accepted input forms and coordinate class. A red input
     // can also alias the returned point's x, so it stays on the original path.
     if (typeof x === 'string' && /^[0-9a-f]{1,64}$/i.test(x)) x = new CoordinateBN(x, 16);
     if (isCoordinate(x, null)) {
-      const sec = x.toArrayLike(Buffer, 'be', 33);
-      sec[0] = odd ? 3 : 2;
-      const xy = native.publicKeyParse(sec);
+      const xy = parsePointX(odd, x);
       if (xy) return ecPoint(x, new CoordinateBN(xy.subarray(33)));
     }
   }
@@ -155,6 +159,7 @@ const getN = Point.getN;
 Point.getP = function() {
   return curve.p.clone();
 };
+const getP = Point.getP;
 
 if (!Point.prototype._getX)
   Point.prototype._getX = Point.prototype.getX;
@@ -255,18 +260,71 @@ Point.pointToCompressed = function pointToCompressed(point) {
 };
 
 
+const liftMethods = ['pow', 'sqr', 'add', 'mod', 'div', 'eq', 'redPow', 'forceRed', '_forceRed'];
+const standardLiftBN = standardMethods(BN.prototype, liftMethods);
+const standardLiftCoordinateBN = standardMethods(CoordinateBN.prototype, liftMethods);
+const bnRed = BN.red;
+const standardLiftReduction = standardMethods(Object.getPrototypeOf(BN.red('k256')), [
+  'convertTo', 'convertFrom', 'pow', 'sqr', 'mul', 'imod'
+]);
+const liftField = typeof BigInt === 'function' ? BigInt('0x' + fieldHex) : undefined;
+
+function isQuadraticResidue(value) {
+  const zero = BigInt(0);
+  const one = BigInt(1);
+  const three = BigInt(3);
+  const five = BigInt(5);
+  const seven = BigInt(7);
+  let modulus = liftField;
+  let positive = true;
+  while (value > zero) {
+    while ((value & one) === zero) {
+      value >>= one;
+      const residue = modulus & seven;
+      if (residue === three || residue === five) positive = !positive;
+    }
+    if (value === one) return positive;
+    if ((value & three) === three && (modulus & three) === three) positive = !positive;
+    const remainder = modulus % value;
+    modulus = value;
+    value = remainder;
+  }
+  return false;
+}
+
 Point.prototype.liftX = function() {
   const fieldSize = Point.getP();
+  if (liftField !== undefined && typeof native?.publicKeyParse === 'function' &&
+      methodValue(Point, 'getP') === getP && methodValue(BN, 'red') === bnRed &&
+      Object.getPrototypeOf(this) === Point.prototype && this.curve === curve && !this.inf &&
+      standardLiftBN() && standardLiftCoordinateBN() && standardLiftReduction() &&
+      hasStandardCurve() && isCoordinate(this.x, red)) {
+    const x = this.x.fromRed();
+    let uncompressed;
+    try {
+      uncompressed = parsePointX(false, x);
+    } catch {
+      // Preserve the original lift when native parsing is unavailable.
+    }
+    if (uncompressed) {
+      // Exponentiation in the JS path yields the unique square root that is
+      // itself a square. Its sign determines the returned coordinate class.
+      const y = uncompressed.subarray(33);
+      const Y = CoordinateBN === BN || isQuadraticResidue(BigInt('0x' + y.toString('hex'))) ? BN : CoordinateBN;
+      return new Point(x, new Y(y), true);
+    }
+  }
+
   const zero = new BN(0);
   const one = new BN(1);
   const two = new BN(2);
   const three = new BN(3);
   const four = new BN(4);
   const seven = new BN(7);
-  const red = BN.red('k256');
+  const liftRed = BN.red('k256');
 
   const c = this.x.pow(three).add(seven).mod(fieldSize);
-  const y = c.toRed(red).redPow(fieldSize.add(one).div(four)).mod(fieldSize);
+  const y = c.toRed(liftRed).redPow(fieldSize.add(one).div(four)).mod(fieldSize);
   
   if (!c.eq(y.pow(two).mod(fieldSize))) {
     throw new Error('liftX failed');

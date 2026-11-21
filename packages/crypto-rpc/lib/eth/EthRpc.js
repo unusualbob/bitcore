@@ -13,22 +13,21 @@ const setTimeoutAsync = util.promisify(setTimeout);
 const MAX_NATIVE_KECCAK_BYTES = 4096;
 const MAX_LOW_S = '0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0';
 
+function nativeTransactionDigest(preimage) {
+  const hash = preimage.length <= 2 + 2 * MAX_NATIVE_KECCAK_BYTES
+    ? nativeCrypto?.cwcKeccak256 : nativeCrypto?.cwcKeccak256Large;
+  if (typeof hash !== 'function') return;
+  const digest = hash(Buffer.from(preimage.slice(2), 'hex'));
+  if (!Buffer.isBuffer(digest) || digest.length !== 32) throw new Error('Invalid native EVM transaction digest');
+  return digest;
+}
+
 function getTransactionSender(tx) {
   const signature = tx.signature;
   if (typeof nativeCrypto?.cwcEvmRecoverAddress === 'function' && tx.type !== null && tx.type <= 2 &&
       signature && signature.isValid?.() !== false && signature.s.toLowerCase() <= MAX_LOW_S) {
-    let digest;
-    if (typeof nativeCrypto.cwcKeccak256 === 'function') {
-      const preimage = tx.unsignedSerialized;
-      if (preimage.length <= 2 + 2 * MAX_NATIVE_KECCAK_BYTES) {
-        digest = nativeCrypto.cwcKeccak256(Buffer.from(preimage.slice(2), 'hex'));
-        if (!Buffer.isBuffer(digest) || digest.length !== 32) throw new Error('Invalid native EVM transaction digest');
-      } else {
-        digest = Buffer.from(ethers.keccak256(preimage).slice(2), 'hex');
-      }
-    } else {
-      digest = Buffer.from(tx.unsignedHash.slice(2), 'hex');
-    }
+    const preimage = tx.unsignedSerialized;
+    const digest = nativeTransactionDigest(preimage) ?? Buffer.from(ethers.keccak256(preimage).slice(2), 'hex');
     const compact = Buffer.from(signature.r.slice(2) + signature.s.slice(2), 'hex');
     const address = nativeCrypto.cwcEvmRecoverAddress(digest, compact, signature.yParity);
     if (address) {
@@ -539,10 +538,18 @@ export class EthRpc {
   decodeRawTransaction({ rawTx }) {
     const decodedTx = ethers.Transaction.from(rawTx);
     const from = getTransactionSender(decodedTx);
+    // Hash ethers' canonical signed encoding. Blob transactions have distinct
+    // sidecar and transaction encodings and use the SDK hash getter.
+    let hash;
+    if (decodedTx.isSigned() && decodedTx.type != null && decodedTx.type <= 2 &&
+        typeof nativeCrypto?.cwcKeccak256Large === 'function') {
+      const digest = nativeTransactionDigest(decodedTx.serialized);
+      if (digest) hash = '0x' + digest.toString('hex');
+    }
+    hash ??= decodedTx.hash;
     const {
       to,
       nonce,
-      hash,
       value,
       type,
       gasPrice,

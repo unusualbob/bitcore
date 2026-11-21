@@ -3,13 +3,9 @@ import * as SolComputeBudget from '@solana-program/compute-budget';
 import * as SolComputeMemo from '@solana-program/memo';
 import * as SolSystem from '@solana-program/system';
 import * as SolToken from '@solana-program/token';
+import { decodeBase58, encodeBase58 } from '../../base58';
 import { nativeEd25519Sign } from '../../ed25519';
 import type { Key } from '../../types/derivation';
-
-function decodePrivateSeed(value: string): Uint8Array {
-  // The codec allocates these bytes from the string, so the signer can clear them.
-  return SolKit.getBase58Encoder().encode(value) as Uint8Array;
-}
 
 export class SOLTxProvider {
 
@@ -210,11 +206,11 @@ export class SOLTxProvider {
   async #signTransaction(params: { tx: string; key: Key }, partial: boolean): Promise<string> {
     const { tx, key } = params;
     const decodedTx = this.decodeRawTransaction({ rawTx: tx, decodeTransactionMessage: false });
-    const privKeyBytes = decodePrivateSeed(key.privKey);
+    const privKeyBytes = decodeBase58(key.privKey);
     try {
       const native = nativeEd25519Sign(privKeyBytes, decodedTx.messageBytes);
       if (native) {
-        const address = SolKit.getBase58Decoder().decode(native.publicKey);
+        const address = encodeBase58(native.publicKey);
         if (decodedTx.signatures[address] !== undefined) {
           const signed = { ...decodedTx, signatures: { ...decodedTx.signatures, [address]: native.signature } };
           if (!partial) SolKit.assertTransactionIsFullySigned(signed);
@@ -232,13 +228,13 @@ export class SOLTxProvider {
 
   async signMessage(params) {
     const { key, messageBytes } = params;
-    const privKeyBytes = decodePrivateSeed(key.privKey);
+    const privKeyBytes = decodeBase58(key.privKey);
     try {
       const native = nativeEd25519Sign(privKeyBytes, messageBytes);
-      if (native) return SolKit.getBase58Decoder().decode(native.signature);
+      if (native) return encodeBase58(native.signature);
       const keypair = await SolKit.createKeyPairFromPrivateKeyBytes(privKeyBytes);
       const signedBytes = await SolKit.signBytes(keypair.privateKey, messageBytes);
-      return SolKit.getBase58Decoder().decode(signedBytes);
+      return encodeBase58(signedBytes);
     } finally {
       privKeyBytes.fill(0);
     }
@@ -250,12 +246,12 @@ export class SOLTxProvider {
     const signedTx = await this.sign({ tx, key });
     const decodedTx = this.decodeRawTransaction({ rawTx: signedTx, decodeTransactionMessage: false });
     const sigEncoding = decodedTx.signatures[key.address];
-    return SolKit.getBase58Decoder().decode(sigEncoding);
+    return encodeBase58(sigEncoding);
   }
 
   applySignature(params: { tx: string; signature: string }): string {
     const { tx, signature } = params;
-    const signatures = [SolKit.getBase58Encoder().encode(signature)];
+    const signatures = [decodeBase58(signature)];
     const transaction = SolKit.getBase64Encoder().encode(tx);
     const transformWithNewSignatures = (_tx) => {
       const { messageBytes } = _tx;
@@ -321,7 +317,7 @@ export class SOLTxProvider {
       throw new Error('tx is unsigned by fee payer');
     }
 
-    return SolKit.getBase58Decoder().decode(signature);
+    return encodeBase58(signature);
   }
 
   getSighash(_params: { tx: string }): string {

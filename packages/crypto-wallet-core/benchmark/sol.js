@@ -2,8 +2,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
 
 async function sample() {
   const { BitcoreLib, Deriver, SolKit, SolanaProgram, Transactions } = require('..');
@@ -22,6 +22,7 @@ async function sample() {
   const spl = Transactions.create({ chain: 'SOLSPL', ...txParams, fromAta: other.address, tokenAddress: mint.address, decimals: 6 });
   const seed = Deriver.privateKeyToBuffer('SOL', key.privKey);
   const messageBytes = Buffer.alloc(200, 19);
+  const longMessageBytes = Buffer.alloc(8192, 19);
   const pkcs8 = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]);
   const importKey = () => crypto.createPrivateKey({ key: pkcs8, format: 'der', type: 'pkcs8' });
   const publicKeyObject = crypto.createPublicKey(importKey());
@@ -33,11 +34,14 @@ async function sample() {
     slip10ChildPath: () => deriver.deriveChild(parent, "m/44'/501'/0'/0'"),
     ed25519PublicKey: () => Deriver.getPublicKey('SOL', 'livenet', seed),
     receiveKey: () => Deriver.derivePrivateKey('SOL', 'livenet', xpriv.xprivkey, 0, false),
+    receiveKeyViaHdPrivateKey: () => Deriver.derivePrivateKey('SOL', 'livenet', new BitcoreLib.HDPrivateKey(xpriv.xprivkey), 0, false),
     signMessage: () => provider.signMessage({ key, messageBytes }),
+    signMessage8KiB: () => provider.signMessage({ key, messageBytes: longMessageBytes }),
     signSol: () => Transactions.sign({ chain: 'SOL', tx: sol, key }),
     signSpl: () => Transactions.sign({ chain: 'SOLSPL', tx: spl, key }),
     ata: () => Token.findAssociatedTokenPda({ owner: key.address, tokenProgram: Token.TOKEN_PROGRAM_ADDRESS, mint: mint.address })
   };
+  assert.deepEqual(operations.receiveKey(), operations.receiveKeyViaHdPrivateKey());
   if (process.env.BITCORE_ECDSA_BACKEND === 'native') {
     for (const [name, run] of Object.entries({ slip10DeriveEd25519: operations.slip10ChildPath,
       ed25519PublicKey: operations.ed25519PublicKey, ed25519Sign: operations.signSol, solAssociatedTokenAddress: operations.ata })) {

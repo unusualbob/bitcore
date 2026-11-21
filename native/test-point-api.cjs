@@ -82,10 +82,17 @@ function checkLibrary({ name, Point, BN, ec, ellipticMul, ellipticAdd, bnMul, bn
     assert(xy.add(g).eq(g.mul(k.addn(1))));
 
     if (name === 'bitcore-lib') {
-      const lifted = xy.liftX();
-      assert.equal(lifted.getX().cmp(x), 0);
-      assert(lifted.getY().isEven());
-      assert.equal(lifted.validate(), lifted);
+      const beforeLift = calls?.count;
+      for (const input of [xy, expected, xy.neg()]) {
+        const lifted = input.liftX();
+        assert.equal(lifted.getX().cmp(x), 0);
+        assert(lifted.getY().isEven());
+        assert.equal(lifted.validate(), lifted);
+        assert.notEqual(lifted.x, input.x);
+        assert.equal(Object.getPrototypeOf(lifted.x), Object.getPrototypeOf(input.x));
+        results.push([record(lifted), Object.getPrototypeOf(lifted.y) === BN.prototype]);
+      }
+      if (calls) assert.equal(calls.count, beforeLift + 3);
     }
     if (name === 'bitcore-lib-cash') {
       const square = y0 => modPow(BigInt(y0.toString(10)) % p, (p - 1n) / 2n, p) === 1n;
@@ -124,6 +131,23 @@ function checkLibrary({ name, Point, BN, ec, ellipticMul, ellipticAdd, bnMul, bn
   Point.fromX(false, customX);
   assert.equal(converted, 1);
   assert.equal(calls?.count, before);
+
+  if (name === 'bitcore-lib') {
+    const altered = Point(g.getX(), g.getY());
+    let powered = 0;
+    altered.x.pow = function(exponent) {
+      powered++;
+      return BN.prototype.pow.call(this, exponent);
+    };
+    assert(altered.liftX().eq(g));
+    assert.equal(powered, 1);
+    assert.equal(calls?.count, before);
+    delete altered.x.pow;
+    altered.x.words = [0];
+    altered.x.length = 1;
+    assert.throws(() => altered.liftX(), /^Error: liftX failed$/);
+    if (calls) assert.equal(calls.count, before + 1);
+  }
 
   return results;
 }
@@ -209,6 +233,9 @@ function runCorpus() {
     const local = createRequire(require.resolve(`../packages/${name}`));
     const ec = new (local('elliptic').ec)('secp256k1');
     const { mul: ellipticMul, add: ellipticAdd } = Object.getPrototypeOf(ec.g);
+    const curveProperties = Reflect.ownKeys(ec.curve);
+    const generatorProperties = Reflect.ownKeys(ec.g);
+    const fixedNafMul = ec.curve._fixedNafMul;
     const originalBN = local('bn.js');
     const { mul: bnMul, div: bnDiv, redPow: bnRedPow } = originalBN.prototype;
     let calls;
@@ -224,6 +251,9 @@ function runCorpus() {
     }
     const { BN, Point } = local('.').crypto;
     assert.equal(BN, originalBN);
+    assert.deepEqual(Reflect.ownKeys(ec.curve), curveProperties);
+    assert.deepEqual(Reflect.ownKeys(ec.g), generatorProperties);
+    assert.equal(ec.curve._fixedNafMul, fixedNafMul);
     checkOverrides(Point);
     checkLargeBN(BN);
     if (calls) {

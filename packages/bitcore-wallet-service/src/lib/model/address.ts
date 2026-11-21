@@ -13,6 +13,14 @@ import { AddressManager } from './addressmanager';
 const $ = singleton();
 const { Constants, Utils } = Common;
 
+type HDPublicKey = InstanceType<typeof BitcoreLib.HDPublicKey>;
+export type DeriveAddressPublicKey = (xpub: string, path: string) => HDPublicKey['publicKey'];
+
+function hdMethods(HDPublicKey) {
+  const prototype = HDPublicKey.prototype;
+  return [prototype.deriveChild, prototype._deriveFromString, prototype._deriveWithNumber];
+}
+
 export interface IAddress {
   version: string;
   createdOn: number;
@@ -100,7 +108,31 @@ export class Address {
     return x;
   }
 
-  static _deriveAddress(scriptType, publicKeyRing, path, m, chain, network, noNativeCashAddr, escrowInputs?, hardwareSourcePublicKey?, clientDerivedPublicKey?) {
+  static createScanPublicKeyDeriver(chain: string): DeriveAddressPublicKey | undefined {
+    const defaults = scanKeyDefaults.get(chain);
+    if (!defaults || Address.derive !== deriveAddress || Address._deriveAddress !== deriveRawAddress) return;
+
+    const HDPublicKey = Address.Bitcore[chain]?.HDPublicKey;
+    if (HDPublicKey !== defaults.HDPublicKey || hdMethods(HDPublicKey).some((method, i) => method !== defaults.methods[i])) return;
+
+    const branches = new Map<string, HDPublicKey>();
+    return (xpub, path) => {
+      const match = /^(m\/(?:(0|[1-9]\d*)\/)?[01])\/(0|[1-9]\d*)$/.exec(path);
+      if (!match || typeof xpub !== 'string' || Number(match[2]) >= 0x80000000 || Number(match[3]) >= 0x80000000) {
+        return new HDPublicKey(xpub).deriveChild(path).publicKey;
+      }
+      const [, branchPath, , index] = match;
+      const key = `${branchPath}:${xpub}`;
+      let branch = branches.get(key);
+      if (!branch) {
+        branch = new HDPublicKey(xpub).deriveChild(branchPath);
+        branches.set(key, branch);
+      }
+      return branch.deriveChild(`m/${index}`).publicKey;
+    };
+  }
+
+  static _deriveAddress(scriptType, publicKeyRing, path, m, chain, network, noNativeCashAddr, escrowInputs?, hardwareSourcePublicKey?, clientDerivedPublicKey?, derivePublicKey: DeriveAddressPublicKey = undefined) {
     $.checkArgument(Utils.checkValueInCollection(scriptType, Constants.SCRIPT_TYPES));
     const externSourcePublicKey = hardwareSourcePublicKey || clientDerivedPublicKey;
     if (externSourcePublicKey) {
@@ -119,6 +151,7 @@ export class Address {
     }
 
     let publicKeys = (publicKeyRing || []).map(item => {
+      if (derivePublicKey) return derivePublicKey(item.xPubKey, path);
       const xpub = Address.Bitcore[chain]
         ? new Address.Bitcore[chain].HDPublicKey(item.xPubKey)
         : new Address.Bitcore.btc.HDPublicKey(item.xPubKey);
@@ -197,9 +230,10 @@ export class Address {
     noNativeCashAddr = false,
     escrowInputs?,
     hardwareSourcePublicKey?,
-    clientDerivedPublicKey?
+    clientDerivedPublicKey?,
+    derivePublicKey?: DeriveAddressPublicKey
   ) {
-    const raw = Address._deriveAddress(
+    const args: Parameters<typeof Address._deriveAddress> = [
       scriptType,
       publicKeyRing,
       path,
@@ -210,7 +244,9 @@ export class Address {
       escrowInputs,
       hardwareSourcePublicKey,
       clientDerivedPublicKey
-    );
+    ];
+    if (derivePublicKey && Address._deriveAddress === deriveRawAddress) args.push(derivePublicKey);
+    const raw = Address._deriveAddress(...args);
     return Address.create(
       _.extend(raw, {
         coin,
@@ -224,3 +260,11 @@ export class Address {
     );
   }
 }
+
+const deriveAddress = Address.derive;
+const deriveRawAddress = Address._deriveAddress;
+// Dogecoin's full-path derivation updates its existing key cache.
+const scanKeyDefaults = new Map(['btc', 'bch', 'ltc'].map(chain => {
+  const { HDPublicKey } = Address.Bitcore[chain];
+  return [chain, { HDPublicKey, methods: hdMethods(HDPublicKey) }];
+}));

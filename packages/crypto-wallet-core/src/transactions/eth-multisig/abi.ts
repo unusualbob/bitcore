@@ -1,3 +1,6 @@
+import { registerContractAbi } from '../evm-contract';
+import type { AbiItem } from 'web3-utils';
+
 export const MultisigAbi = [
   {
     constant: true,
@@ -722,3 +725,4 @@ export const MultisigAbi = [
     type: 'event'
   }
 ];
+registerContractAbi(MultisigAbi as AbiItem[]);

@@ -40,8 +40,9 @@
   ],
   "scripts": {
     "build:crypto": "node native/build-node.cjs",
-    "test:crypto": "cargo test --locked --manifest-path native/Cargo.toml --workspace && node native/build-node.cjs && tsc -p packages/crypto-wallet-core && node native/check-crypto.cjs",
+    "test:crypto": "cargo test --locked --manifest-path native/Cargo.toml --workspace && node native/build-node.cjs && node native/check-crypto.cjs",
     "bench:utxo": "node native/bench-utxo.cjs",
+    "bench:keccak": "node packages/crypto-wallet-core/benchmark/large-keccak.js",
     "build:ecdsa": "node native/build-node.cjs",
     "test:ecdsa": "cargo test --locked --manifest-path native/Cargo.toml -p bitcore-ecdsa && node native/build-node.cjs && node native/test-binding.cjs && node native/test-parity.cjs",
     "bench:ecdsa": "node packages/bitcore-lib/benchmark/ecdsa.js",

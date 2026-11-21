@@ -1,8 +1,19 @@
 import { expect } from 'chai';
 import crypto from 'crypto';
-import { Deriver } from '../src';
+import { BitcoreLib, BitcoreLibCash, BitcoreLibDoge, BitcoreLibLtc, Deriver } from '../src';
 
 describe('IDeriver', function () {
+  it('interleaves receive and change addresses in the same order as scalar derivation', () => {
+    const forks = { BCH: BitcoreLibCash, DOGE: BitcoreLibDoge, LTC: BitcoreLibLtc };
+    for (const chain of ['BTC', 'BCH', 'DOGE', 'LTC', 'ETH', 'MATIC', 'ARB', 'BASE', 'OP', 'ARC', 'XRP']) {
+      const { HDPrivateKey } = forks[chain] ?? BitcoreLib;
+      const xpub = HDPrivateKey.fromSeed(Buffer.alloc(32, 17), 'livenet').hdPublicKey.toString();
+      const expected = [5, 6].flatMap(i => [false, true].map(change =>
+        Deriver.deriveAddress(chain, 'livenet', xpub, i, change)));
+      expect(Deriver.deriveAddressRange(chain, 'livenet', xpub, 5, 7, true), chain).to.deep.equal(expected);
+    }
+  });
+
   describe('getPublicKey (Buffer-first)', () => {
     it('BTC: should derive the compressed secp256k1 public key', () => {
       // Well-known secp256k1 test vector: private key 1 maps to generator point G.

@@ -1,7 +1,7 @@
-function loadNativeCrypto() {
+export function loadNativeCrypto(packageName = '@bitpay-labs/bitcore-lib') {
   if (typeof module === 'undefined' || typeof module.require !== 'function' ||
       typeof process === 'undefined' || !process.versions?.node) return;
-  const path = '@bitpay-labs/bitcore-lib/lib/crypto/ecdsa-native';
+  const path = `${packageName}/lib/crypto/ecdsa-native`;
   try {
     return module.require(path).native;
   } catch (err) {

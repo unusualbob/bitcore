@@ -7,10 +7,11 @@ const { createHash } = require('node:crypto');
 
 function runCorpus() {
   const counts = new Map();
+  let addon;
   if (process.env.BITCORE_ECDSA_BACKEND === 'native') {
-    const addon = require('../packages/bitcore-lib/lib/native/bitcore_ecdsa.node');
+    addon = require('../packages/bitcore-lib/lib/native/bitcore_ecdsa.node');
     for (const name of ['cwcKeccak256', 'cwcEvmAddress', 'cwcEvmRecoverAddress', 'cwcSignRecoverable',
-      'cwcXrpSign', 'cwcXrpAddress', 'ed25519Sign']) {
+      'cwcXrpSign', 'cwcXrpSignLarge', 'cwcXrpAddress', 'ed25519Sign', 'ed25519SignLarge']) {
       const method = addon[name];
       assert.equal(typeof method, 'function', 'Rebuild the wallet crypto addon for ' + name);
       counts.set(name, 0);
@@ -21,7 +22,7 @@ function runCorpus() {
     }
   }
   const { BitcoreLib, Deriver, Message, Transactions, ethers, xrpl } = require('../packages/crypto-wallet-core');
-  const { signEvmDigest, trySignXrp } = require('../packages/crypto-wallet-core/ts_build/src/wallet-crypto');
+  const { recoverEvmAddress, signEvmDigest, trySignXrp } = require('../packages/crypto-wallet-core/ts_build/src/wallet-crypto');
   assert.equal(trySignXrp('abcd', 'ed' + '00'.repeat(30)), undefined);
   const results = [];
   const recordError = run => assert.throws(run, err => {
@@ -33,6 +34,8 @@ function runCorpus() {
   const key = { privKey, pubKey: new BitcoreLib.PrivateKey(privKey).publicKey.toString() };
   const signer = new ethers.Wallet('0x' + privKey);
   const signingKey = new ethers.SigningKey(signer.privateKey);
+  const malformedDigest = ethers.ZeroHash + 'zz';
+  recordError(() => recoverEvmAddress(malformedDigest, signingKey.sign(ethers.ZeroHash)));
   for (const digest of [
     '0x' + '00'.repeat(32),
     '0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
@@ -129,19 +132,28 @@ function runCorpus() {
       Amount: '10000', Fee: '12', Sequence: 1, Flags: 2147483648
     };
     const ticket = { ...payment, Sequence: 0, TicketSequence: 16 };
-    const issued = { ...payment, Amount: { currency: 'USD', issuer: xrpSec.classicAddress, value: '123.400' } };
+    const amount = { currency: 'USD', issuer: destination, value: '123.400' };
+    const issued = { ...payment, Amount: amount };
+    const issuedTiny = { ...ticket, Amount: { ...amount, value: '1.23e-80' }, SendMax: amount };
     const accountSet = { TransactionType: 'AccountSet', Account: wallet.classicAddress, Fee: '12', Sequence: 2, SetFlag: 1 };
     const accountDelete = {
       TransactionType: 'AccountDelete', Account: wallet.classicAddress, Fee: '2000000',
       Sequence: 2, Destination: destination, DestinationTag: 4
     };
-    for (const transaction of [payment, ticket, issued, accountSet, accountDelete]) {
+    const trustSet = { TransactionType: 'TrustSet', Account: wallet.classicAddress, Fee: '12', Sequence: 2, LimitAmount: amount };
+    const offerCreate = {
+      TransactionType: 'OfferCreate', Account: wallet.classicAddress, Fee: '12', Sequence: 2,
+      TakerPays: amount, TakerGets: '1000'
+    };
+    const method = wallet === xrpEd ? 'ed25519Sign' : 'cwcXrpSign';
+    for (const transaction of [payment, ticket, issued, issuedTiny, accountSet, accountDelete, trustSet, offerCreate]) {
       const raw = xrpl.encode(transaction);
       const decoded = xrpl.decode(raw);
       const expected = wallet.sign(decoded);
       const signingData = xrpl.encodeForSigning({ ...decoded, SigningPubKey: xrpKey.pubKey });
       const digest = createHash('sha512').update(Buffer.from(signingData, 'hex')).digest('hex').slice(0, 64).toUpperCase();
       assert.equal(Transactions.getSighash({ chain: 'XRP', tx: raw, pubKey: xrpKey.pubKey }), digest);
+      const callsBefore = counts.get(method);
       const result = provider.getSignatureObject({ tx: raw, key: xrpKey });
       assert.deepEqual(result, { signedTransaction: expected.tx_blob, hash: expected.hash });
       const signed = Transactions.sign({ chain: 'XRP', tx: raw, key: xrpKey });
@@ -150,15 +162,59 @@ function runCorpus() {
       assert(wallet.verifyTransaction(signed));
       assert.equal(Transactions.getSignature({ chain: 'XRP', tx: raw, key: xrpKey }),
         xrpl.decode(expected.tx_blob).TxnSignature);
+      if (callsBefore !== undefined) assert.equal(counts.get(method) - callsBefore, 3, transaction.TransactionType);
       results.push(result);
     }
+    const signedPayment = wallet.sign(payment);
+    const rawPayment = xrpl.encode(payment);
+    for (const method of ['getSignatureObject', 'getSignature', 'applySignature']) {
+      const withOverride = Object.create(provider);
+      let overriddenCalls = 0;
+      withOverride[method] = function(params) {
+        overriddenCalls++;
+        return provider[method].call(this, params);
+      };
+      assert.equal(withOverride.sign({ tx: rawPayment, key: xrpKey }), signedPayment.tx_blob);
+      assert.equal(overriddenCalls, 1, method);
+    }
+
+    const callsBeforeFallbacks = counts.get(method);
+    recordError(() => provider.getSignatureObject({ tx: signedPayment.tx_blob, key: xrpKey }));
+    recordError(() => provider.getSignatureObject({ tx: xrpl.encode({ ...payment, Amount: undefined }), key: xrpKey }));
+    const invalidCurrency = xrpl.encode({ ...issued, Amount: { ...amount, currency: 'xRp' } });
+    recordError(() => provider.getSignatureObject({ tx: invalidCurrency, key: xrpKey }));
     const multi = wallet.sign(payment, true);
     assert.equal(Transactions.getHash({ chain: 'XRP', tx: multi.tx_blob }), multi.hash);
     recordError(() => provider.getSignatureObject({ tx: multi.tx_blob, key: xrpKey }));
-    const longPayment = { ...payment, Memos: [{ Memo: { MemoData: 'AB'.repeat(wallet === xrpEd ? 1500 : 4200) } }] };
+    assert.equal(counts.get(method), callsBeforeFallbacks);
+    const longPayment = { ...issued, Memos: [{ Memo: { MemoData: 'AB'.repeat(wallet === xrpEd ? 1500 : 4200) } }] };
     const longRaw = xrpl.encode(longPayment);
     const longExpected = wallet.sign(xrpl.decode(longRaw));
+    const largeMethod = method + 'Large';
+    const largeCallsBefore = counts.get(largeMethod);
     assert.equal(Transactions.sign({ chain: 'XRP', tx: longRaw, key: xrpKey }), longExpected.tx_blob);
+    assert.equal(counts.get(method), callsBeforeFallbacks);
+    if (addon) {
+      assert.equal(counts.get(largeMethod) - largeCallsBefore, 1);
+      const original = addon[largeMethod];
+      try {
+        addon[largeMethod] = undefined;
+        assert.equal(Transactions.sign({ chain: 'XRP', tx: longRaw, key: xrpKey }), longExpected.tx_blob);
+      } finally {
+        addon[largeMethod] = original;
+      }
+
+      const message = Buffer.from(xrpl.encodeForSigning({ ...xrpl.decode(longRaw), SigningPubKey: xrpKey.pubKey }), 'hex');
+      const secret = Buffer.from(xrpKey.privKey.slice(-64), 'hex');
+      const sign = input => wallet === xrpEd ? original(secret, input).subarray(32) : original(input, secret);
+      const padded = Buffer.concat([Buffer.alloc(1), message, Buffer.alloc(1)]);
+      assert.equal(sign(padded.subarray(1, -1)).toString('hex').toUpperCase(), xrpl.decode(longExpected.tx_blob).TxnSignature);
+      assert.throws(() => sign(new Uint8Array(new SharedArrayBuffer(message.length))), /unshared ArrayBuffer/);
+      assert.throws(() => sign(new Uint16Array(message.length)), /unshared ArrayBuffer/);
+      assert.throws(() => wallet === xrpEd ? original(secret.subarray(1), message) : original(message, secret.subarray(1)),
+        /Expected a 32-byte/);
+      if (wallet === xrpSec) assert.equal(original(message, Buffer.alloc(32)), null);
+    }
     assert.equal(Deriver.getAddress('XRP', 'mainnet', xrpKey.pubKey), wallet.classicAddress);
     const oddPublicKey = '12';
     assert.equal(Deriver.getAddress('XRP', 'mainnet', oddPublicKey), xrpl.deriveAddress(oddPublicKey));

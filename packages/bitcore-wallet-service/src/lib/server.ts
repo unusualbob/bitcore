@@ -5128,7 +5128,7 @@ export class WalletService implements IWalletService {
         derive: () => wallet.createAddress(isChange, step),
         index: () => wallet.addressManager.getCurrentIndex(isChange),
         rewind: (n) => wallet.addressManager.rewindIndex(isChange, step, n),
-        getSkippedAddress: () => wallet.getSkippedAddress()
+        createSkippedAddressReader: () => Wallet.createSkippedAddressReader(wallet)
       });
       if (opts.includeCopayerBranches) {
         for (const copayer of wallet.copayers) {
@@ -5155,8 +5155,9 @@ export class WalletService implements IWalletService {
           if (step > 1) {
             this.logd('Deriving addresses for scan steps gaps DERIVATOR:' + derivator.id);
 
+            const getSkippedAddress = derivator.createSkippedAddressReader();
             let addr;
-            while ((addr = derivator.getSkippedAddress())) {
+            while ((addr = getSkippedAddress())) {
               addresses.push(addr);
             }
             // this.logi(i + ' addresses were added.');

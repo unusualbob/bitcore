@@ -1,11 +1,33 @@
-import { HDPrivateKey, encoding } from '@bitpay-labs/bitcore-lib';
+import { HDPrivateKey, Networks, PrivateKey, crypto, encoding } from '@bitpay-labs/bitcore-lib';
 import * as ed25519 from 'ed25519-hd-key';
-import { Paths } from '../paths';
 import { nativeEd25519PublicKey, nativeSlip10Path } from '../../ed25519';
+import { Paths } from '../paths';
 import type { IDeriver, Key } from '../../types/derivation';
 
 function publicKeyFromSeed(seed: Buffer): Buffer {
   return nativeEd25519PublicKey(seed) ?? ed25519.getPublicKey(seed, false);
+}
+
+const MAX_SERIALIZED_ROOT_LENGTH = Math.ceil(HDPrivateKey.SerializedByteSize * Math.log(256) / Math.log(58));
+
+function readSerializedRoot(xprivKey: string): { key: Buffer; chainCode: Buffer } | undefined {
+  if (typeof xprivKey !== 'string' || !xprivKey || xprivKey.length > MAX_SERIALIZED_ROOT_LENGTH || Networks.get(xprivKey)) return;
+
+  let payload: Buffer;
+  try {
+    payload = encoding.Base58Check.decode(xprivKey);
+  } catch {
+    // Let HDPrivateKey handle other recognized formats and report its usual errors.
+    return;
+  }
+  if (payload.length !== HDPrivateKey.DataLength) return;
+
+  // Match HDPrivateKey's scalar and network validation without building a secp256k1 public key.
+  const key = payload.subarray(HDPrivateKey.PrivateKeyStart, HDPrivateKey.PrivateKeyEnd);
+  const network = Networks.get(payload.readInt32BE(HDPrivateKey.VersionStart));
+  const error = PrivateKey.getValidationError(crypto.BN.fromBuffer(key), network);
+  if (error) throw error;
+  return { key, chainCode: payload.subarray(HDPrivateKey.ChainCodeStart, HDPrivateKey.ChainCodeEnd) };
 }
 
 export class SolDeriver implements IDeriver {
@@ -54,8 +76,12 @@ export class SolDeriver implements IDeriver {
   }
 
   derivePrivateKeyWithPath(network: string, xprivKey: string, path: string, _addressType: string) {
-    const xpriv = new HDPrivateKey(xprivKey, network);
-    const child = this.deriveChild({ key: xpriv._buffers.privateKey, chainCode: xpriv._buffers.chainCode }, path);
+    let root = readSerializedRoot(xprivKey);
+    if (!root) {
+      const xpriv = new HDPrivateKey(xprivKey, network);
+      root = { key: xpriv._buffers.privateKey, chainCode: xpriv._buffers.chainCode };
+    }
+    const child = this.deriveChild(root, path);
     const pubKey = publicKeyFromSeed(child.key);
     const address = encoding.Base58.encode(pubKey);
     // Solana wallets often represent the private key as a KeyPair consisting of the private key + address/public key.

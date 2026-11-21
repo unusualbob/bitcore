@@ -25,8 +25,8 @@ export class XrpDeriver implements IDeriver {
   derivePrivateKeyWithPath(network: string, xprivKey: string, path: string) {
     const xpriv = new BitcoreLib.HDPrivateKey(xprivKey, network);
     const derivedXPriv = xpriv.derive(path);
-    const privKey = derivedXPriv.toObject().privateKey.toUpperCase();
-    const pubKey = derivedXPriv.hdPublicKey.toObject().publicKey.toUpperCase();
+    const privKey = derivedXPriv.privateKey.toBuffer().toString('hex').toUpperCase();
+    const pubKey = derivedXPriv.publicKey.toString().toUpperCase();
     const address = deriveXrpAddress(pubKey);
     return { address, privKey, pubKey, path };
   }

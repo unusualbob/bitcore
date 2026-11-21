@@ -1,5 +1,7 @@
+const nodeCrypto = require('crypto');
+const { types } = require('util');
 const _ = require('lodash');
-
+const { native } = require('../crypto/ecdsa-native');
 const Hash = require('../crypto/hash');
 const Opcode = require('../opcode');
 const PublicKey = require('../publickey');
@@ -8,6 +10,17 @@ const PublicKey = require('../publickey');
 // https://ide.bitauth.com/import-gist/104baff7503d6a7ad619ad814153b059
 
 const Escrow = {};
+const { sha256, ripemd160, sha256ripemd160 } = Hash;
+const { createHash, hash } = nodeCrypto;
+
+function canBatch() {
+  if (Hash.sha256 !== sha256 || Hash.ripemd160 !== ripemd160 || Hash.sha256ripemd160 !== sha256ripemd160 ||
+      nodeCrypto.createHash !== createHash || nodeCrypto.hash !== hash || nodeCrypto.getFips?.()) {
+    return false;
+  }
+  const algorithms = nodeCrypto.getHashes?.();
+  return algorithms?.includes('sha256') && algorithms.includes('ripemd160');
+}
 
 const pushOpcodeFromNumber = function(n) {
   return {
@@ -35,13 +48,47 @@ const getNumMerkleLevels = function(numPublicKeys) {
   return Math.ceil(Math.log2(numPublicKeys));
 };
 
-Escrow.getMerkleRoot = function getMerkleRoot(hashes) {
+function hashMerkleRoot(hashes) {
   if (hashes.length === 1) {
     return hashes[0];
   }
   const parentHashes = _.chunk(hashes, 2).map(hashPair => Hash.sha256ripemd160(Buffer.concat(hashPair)));
-  return getMerkleRoot(parentHashes);
+  return hashMerkleRoot(parentHashes);
+}
+
+function isOrdinaryBuffer(buffer) {
+  return Buffer.isBuffer(buffer) && !types.isProxy(buffer) && Object.getPrototypeOf(buffer) === Buffer.prototype &&
+    !Object.hasOwn(buffer, 'length') && !Object.hasOwn(buffer, 'buffer') && types.isArrayBuffer(buffer.buffer);
+}
+
+const escrowMerkleRoot = Escrow.getMerkleRoot = function getMerkleRoot(hashes) {
+  if (typeof native?.escrowMerkleRoot === 'function' && types?.isProxy && Array.isArray(hashes) &&
+      !types.isProxy(hashes) && hashes.length >= 8 && hashes.length <= 65536 && canBatch()) {
+    const leaves = Buffer.allocUnsafe(hashes.length * 20);
+    for (let i = 0; i < hashes.length; i++) {
+      const hash = Object.getOwnPropertyDescriptor(hashes, i)?.value;
+      if (!isOrdinaryBuffer(hash) || hash.length !== 20) {
+        return hashMerkleRoot(hashes);
+      }
+      leaves.set(hash, i * 20);
+    }
+    return native.escrowMerkleRoot(leaves);
+  }
+  return hashMerkleRoot(hashes);
 };
+
+function packPublicKeys(publicKeys) {
+  const packed = Buffer.allocUnsafe(publicKeys.length * 66);
+  let offset = 0;
+  for (let i = 0; i < publicKeys.length; i++) {
+    const key = Object.getOwnPropertyDescriptor(publicKeys, i)?.value;
+    if (!isOrdinaryBuffer(key) || (key.length !== 33 && key.length !== 65)) return;
+    packed[offset++] = key.length;
+    packed.set(key, offset);
+    offset += key.length;
+  }
+  return packed.subarray(0, offset);
+}
 
 Escrow.generateMerkleRootFromPublicKeys = function(publicKeys) {
   const numLevels = getNumMerkleLevels(publicKeys.length);
@@ -50,6 +97,14 @@ Escrow.generateMerkleRootFromPublicKeys = function(publicKeys) {
     .map(publicKey => publicKey.toString('hex'))
     .sort()
     .map(publicKeyString => PublicKey.fromString(publicKeyString).toBuffer());
+  if (typeof native?.escrowKeyRoot === 'function' &&
+      Object.getOwnPropertyDescriptor(Escrow, 'getMerkleRoot')?.value === escrowMerkleRoot &&
+      types?.isProxy && Array.isArray(sortedPublicKeys) && !types.isProxy(sortedPublicKeys) &&
+      Object.getPrototypeOf(sortedPublicKeys) === Array.prototype && !Object.hasOwn(sortedPublicKeys, 'concat') &&
+      sortedPublicKeys.length >= 8 && sortedPublicKeys.length <= 65536 && canBatch()) {
+    const keys = packPublicKeys(sortedPublicKeys);
+    if (keys) return native.escrowKeyRoot(keys, sortedPublicKeys.length);
+  }
   const zeros = Array(numItems - publicKeys.length).fill(Buffer.alloc(0));
   const leaves = sortedPublicKeys.concat(zeros).map(value => Hash.sha256ripemd160(value));
   return Escrow.getMerkleRoot(leaves);

@@ -32,12 +32,27 @@ unsafe extern "C" fn sign(env: Env, info: CallbackInfo) -> Value {
         key_bytes.read(env, key, c"Expected a 32-byte Ed25519 seed")?;
         let mut bytes = [0; MAX_MESSAGE_BYTES];
         let size = copy_buffer(env, message, &mut bytes)?;
-        let (public_key, signature) = bitcore_ed25519::sign(&key_bytes.0, &bytes[..size]);
-        let mut signed = [0; 96];
-        signed[..32].copy_from_slice(&public_key);
-        signed[32..].copy_from_slice(&signature);
-        output_buffer(env, &signed)
+        output_signature(env, bitcore_ed25519::sign(&key_bytes.0, &bytes[..size]))
     })
+}
+
+unsafe extern "C" fn sign_large(env: Env, info: CallbackInfo) -> Value {
+    entry_point(env, || {
+        let [key, message] = arguments(env, info)?;
+        let mut key_bytes = SecretBytes([0; 32]);
+        key_bytes.read(env, key, c"Expected a 32-byte Ed25519 seed")?;
+        // Ed25519 reads the message twice. Sign an owned snapshot so both
+        // passes see the same bytes, as in the fixed-size binding.
+        let bytes = with_byte_view(env, message, <[u8]>::to_vec)?;
+        output_signature(env, bitcore_ed25519::sign(&key_bytes.0, &bytes))
+    })
+}
+
+fn output_signature(env: Env, (public_key, signature): ([u8; 32], [u8; 64])) -> Result<Value> {
+    let mut signed = [0; 96];
+    signed[..32].copy_from_slice(&public_key);
+    signed[32..].copy_from_slice(&signature);
+    output_buffer(env, &signed)
 }
 
 unsafe extern "C" fn associated_token_address(env: Env, info: CallbackInfo) -> Value {
@@ -52,9 +67,10 @@ unsafe extern "C" fn associated_token_address(env: Env, info: CallbackInfo) -> V
     })
 }
 
-pub(super) const FUNCTIONS: [(&CStr, Callback); 4] = [
+pub(super) const FUNCTIONS: [(&CStr, Callback); 5] = [
     (c"slip10DeriveEd25519", derive_path),
     (c"ed25519PublicKey", public_key),
     (c"ed25519Sign", sign),
+    (c"ed25519SignLarge", sign_large),
     (c"solAssociatedTokenAddress", associated_token_address),
 ];

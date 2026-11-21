@@ -8,7 +8,8 @@ const rootRequire = createRequire(import.meta.url);
 const walletRequire = createRequire(rootRequire.resolve('@bitpay-labs/crypto-wallet-core'));
 const loader = walletRequire.resolve('@bitpay-labs/bitcore-lib/lib/crypto/ecdsa-native');
 walletRequire(loader);
-const addon = process.argv[2] ? rootRequire(resolve(process.argv[2])) : rootRequire.cache[loader].exports.native;
+const testOnly = process.argv[2] === '--test';
+const addon = process.argv[2] && !testOnly ? rootRequire(resolve(process.argv[2])) : rootRequire.cache[loader].exports.native;
 const selected = {};
 // Exercise the real RPC methods with and without the new exports in one process.
 // Override only the loader's exported object here, without replacing installed binaries.
@@ -42,8 +43,8 @@ const calls = {};
 
 function setNative(enabled) {
   for (const name of [
-    'cwcEvmRecoverAddress', 'cwcKeccak256', 'cwcChecksumAddress', 'cwcXrpSign',
-    'ed25519Sign', 'solAssociatedTokenAddress', 'xrpDeriveKeypair'
+    'cwcEvmRecoverAddress', 'cwcKeccak256', 'cwcKeccak256Large', 'cwcChecksumAddress', 'cwcXrpSign',
+    'cwcXrpSignLarge', 'ed25519Sign', 'ed25519SignLarge', 'solAssociatedTokenAddress', 'xrpDeriveKeypair'
   ]) {
     delete selected[name];
     if (enabled && typeof addon?.[name] === 'function') {
@@ -80,12 +81,16 @@ const blobTransaction = await evmSigner.signTransaction({
 const fallbackBlob = decodeOutcome(blobTransaction);
 setNative(true);
 assert.deepEqual(rawEvm.map((_, index) => decodeEvm(index)), fallbackEvm);
+if (addon?.cwcKeccak256 && addon?.cwcEvmRecoverAddress) {
+  const hashesPerShortTx = addon.cwcKeccak256Large ? 2 : 1;
+  assert.equal(calls.cwcKeccak256, (rawEvm.length - 1) * hashesPerShortTx);
+}
+if (addon?.cwcKeccak256Large && addon?.cwcEvmRecoverAddress) assert.equal(calls.cwcKeccak256Large, 2);
 assert.deepEqual(decodeOutcome(highS), fallbackHighS);
 assert.equal(evmRpc.decodeRawTransaction({ rawTx: unsigned }).from, undefined);
 assert.deepEqual(decodeOutcome('0x1234'), fallbackBadEvm);
 assert.deepEqual(decodeOutcome(blobTransaction), fallbackBlob);
 if (addon?.cwcEvmRecoverAddress) assert.equal(calls.cwcEvmRecoverAddress, rawEvm.length);
-if (addon?.cwcKeccak256 && addon?.cwcEvmRecoverAddress) assert.equal(calls.cwcKeccak256, rawEvm.length - 1);
 
 const rpcMethods = new Set();
 const web3 = new Web3({
@@ -179,8 +184,7 @@ for (const [name, index, invalid, message] of [
 for (const override of [
   { Fee: {} },
   { TxnSignature: 'FF' },
-  { Amount: { currency: 'USD', issuer: xrpWallets[0].address, value: '1.00' } },
-  { Memos: [{ Memo: { MemoData: 'ab'.repeat(4300) } }] }
+  { Amount: { currency: 'USD', issuer: xrpWallets[0].address, value: '1.00' } }
 ]) {
   const originalAutofill = xrpRpc.asyncCall;
   xrpRpc.asyncCall = async (...args) => ({ ...await originalAutofill(...args), ...override });
@@ -191,6 +195,22 @@ for (const override of [
   assert.deepEqual(await outcome(), fallback);
   xrpRpc.asyncCall = originalAutofill;
 }
+for (const [index, method, memoLength] of [[0, 'cwcXrpSignLarge', 4200], [1, 'ed25519SignLarge', 1500]]) {
+  const originalAutofill = xrpRpc.asyncCall;
+  xrpRpc.asyncCall = async (...args) => ({
+    ...await originalAutofill(...args), Memos: [{ Memo: { MemoData: 'AB'.repeat(memoLength) } }]
+  });
+  setNative(false);
+  const expected = await payXrp(index);
+  setNative(true);
+  const before = calls[method] || 0;
+  assert.equal(await payXrp(index), expected);
+  if (addon?.[method]) assert.equal(calls[method], before + 1);
+  delete selected[method];
+  assert.equal(await payXrp(index), expected);
+  xrpRpc.asyncCall = originalAutofill;
+}
+setNative(true);
 
 const seed = hash('sol signer');
 const solSigner = await SolKit.createKeyPairSignerFromPrivateKeyBytes(seed);
@@ -226,6 +246,12 @@ if (Utils.toChecksumAddress && addon?.cwcChecksumAddress) assert.ok(calls.cwcChe
 const output = BitcoreLib.Script.buildPublicKeyHashOut(BitcoreLib.Address.fromPublicKeyHash(hash('btc').subarray(0, 20)));
 const tx = new BitcoreLib.Transaction().addOutput(new BitcoreLib.Transaction.Output({ script: output, satoshis: 1000 }));
 const headerBytes = Buffer.alloc(80);
+
+if (testOnly) {
+  assert.equal(typeof addon?.cwcKeccak256Large, 'function');
+  console.log('Offline RPC compatibility and native dispatch checks passed.');
+  process.exit(0);
+}
 
 async function sample(run, before) {
   before?.();

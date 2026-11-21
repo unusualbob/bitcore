@@ -35,21 +35,31 @@ benchmark(__filename, ({ BitcoreLib, Deriver, Message, Transactions, ethers, xrp
     };
     const xrpSecp = new xrpl.Wallet(pubKey, privKey);
     const xrpEd = xrpl.Wallet.fromEntropy(new Uint8Array(16).fill(i + 1));
-    const xrpParams = wallet => ({
+    const xrpParams = (wallet, amount = '1000', fields = {}) => ({
       chain: 'XRP',
       key: { pubKey: wallet.publicKey, privKey: wallet.privateKey },
       tx: xrpl.encode({ TransactionType: 'Payment', Account: wallet.classicAddress,
-        Destination: xrpDestination, Amount: '1000', Fee: '12', Sequence: i + 1 })
+        Destination: xrpDestination, Amount: amount, Fee: '12', Sequence: i + 1, ...fields })
     });
     const xrp = xrpParams(xrpSecp);
     const xrpEd25519 = xrpParams(xrpEd);
+    const issuedAmount = { currency: 'USD', issuer: xrpDestination, value: `${i + 1}.12300` };
+    const xrpIssued = xrpParams(xrpSecp, issuedAmount);
+    const xrpIssuedEd25519 = xrpParams(xrpEd, issuedAmount);
+    const xrpLong = xrpParams(xrpSecp, issuedAmount, { Memos: [{ Memo: { MemoData: 'AB'.repeat(4200) } }] });
+    const xrpLongEd25519 = xrpParams(xrpEd, issuedAmount, { Memos: [{ Memo: { MemoData: 'AB'.repeat(1500) } }] });
     const signedEvm = { chain: 'ETH', tx: Transactions.sign(evm) };
     const signedXrp = { chain: 'XRP', tx: Transactions.sign(xrp) };
     assert.equal(ethers.Transaction.from(signedEvm.tx).from, new ethers.Wallet('0x' + privKey).address);
     assert(xrpSecp.verifyTransaction(signedXrp.tx));
     assert(xrpEd.verifyTransaction(Transactions.sign(xrpEd25519)));
+    for (const [wallet, params] of [
+      [xrpSecp, xrpIssued], [xrpEd, xrpIssuedEd25519], [xrpSecp, xrpLong], [xrpEd, xrpLongEd25519]
+    ]) {
+      assert.equal(Transactions.sign(params), wallet.sign(xrpl.decode(params.tx)).tx_blob);
+    }
     return {
-      key, evm, erc, multisig, xrp, xrpEd25519, signedEvm, signedXrp,
+      key, evm, erc, multisig, xrp, xrpEd25519, xrpIssued, xrpIssuedEd25519, xrpLong, xrpLongEd25519, signedEvm, signedXrp,
       message: { chain: 'ETH', message: 'CWC benchmark message ' + String(i).repeat(64), privateKey: privKey },
       apply: { chain: 'ETH', tx: evm.tx, signature: Transactions.getSignature(evm) }
     };
@@ -66,6 +76,10 @@ benchmark(__filename, ({ BitcoreLib, Deriver, Message, Transactions, ethers, xrp
     evmAddress: f => Deriver.getAddress('ETH', 'mainnet', f.key.pubKey),
     xrpSignSecp256k1: f => Transactions.sign(f.xrp),
     xrpSignEd25519: f => Transactions.sign(f.xrpEd25519),
+    xrpIssuedSignSecp256k1: f => Transactions.sign(f.xrpIssued),
+    xrpIssuedSignEd25519: f => Transactions.sign(f.xrpIssuedEd25519),
+    xrpLongSignSecp256k1: f => Transactions.sign(f.xrpLong),
+    xrpLongSignEd25519: f => Transactions.sign(f.xrpLongEd25519),
     xrpHash: f => Transactions.getHash(f.signedXrp),
     xrpAddress: f => Deriver.getAddress('XRP', 'mainnet', f.key.pubKey)
   };
@@ -75,7 +89,9 @@ benchmark(__filename, ({ BitcoreLib, Deriver, Message, Transactions, ethers, xrp
       evmSign: 'cwcSignRecoverable', erc20Sign: 'cwcSignRecoverable', multisigSign: 'cwcSignRecoverable',
       evmApplySignature: 'cwcEvmRecoverAddress', evmHash: 'cwcKeccak256', evmSighash: 'cwcKeccak256',
       evmMessageSign: 'cwcSignRecoverable', evmAddress: 'cwcEvmAddress',
-      xrpSignSecp256k1: 'cwcXrpSign', xrpSignEd25519: 'ed25519Sign', xrpAddress: 'cwcXrpAddress'
+      xrpSignSecp256k1: 'cwcXrpSign', xrpSignEd25519: 'ed25519Sign',
+      xrpIssuedSignSecp256k1: 'cwcXrpSign', xrpIssuedSignEd25519: 'ed25519Sign',
+      xrpLongSignSecp256k1: 'cwcXrpSignLarge', xrpLongSignEd25519: 'ed25519SignLarge', xrpAddress: 'cwcXrpAddress'
     };
     for (const [operation, method] of Object.entries(expected)) {
       const original = addon[method];

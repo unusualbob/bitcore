@@ -4,6 +4,10 @@ const BufferWriter = require('../encoding/bufferwriter');
 
 const scopes = new WeakMap();
 
+function hasSighashCache(transaction) {
+  return scopes.has(transaction);
+}
+
 function cachedHash(transaction, field, compute) {
   const scope = scopes.get(transaction);
   if (!scope) return compute();
@@ -91,4 +95,4 @@ function createScope(Input, Output, Hash, canCopy) {
   };
 }
 
-module.exports = { cachedHash, createScope, legacyPreimage, legacyTemplate };
+module.exports = { cachedHash, createScope, hasSighashCache, legacyPreimage, legacyTemplate };
